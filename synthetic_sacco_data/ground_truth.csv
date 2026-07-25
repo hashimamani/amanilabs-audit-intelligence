@@ -1,0 +1,50 @@
+scenario,description,n_records,record_ids
+large_withdrawal,"M01375 withdrew 134,000 vs typical 6,149",1,T0054555
+large_withdrawal,"M00946 withdrew 388,960 vs typical 22,609",1,T0054556
+large_withdrawal,"M01065 withdrew 14,137 vs typical 1,273",1,T0054557
+large_withdrawal,"M00301 withdrew 196,889 vs typical 14,521",1,T0054558
+large_withdrawal,"M00114 withdrew 118,360 vs typical 8,931",1,T0054559
+large_withdrawal,"M00182 withdrew 40,508 vs typical 2,908",1,T0054560
+large_withdrawal,"M01001 withdrew 190,934 vs typical 15,313",1,T0054561
+large_withdrawal,"M01461 withdrew 287,379 vs typical 15,587",1,T0054562
+large_withdrawal,"M00616 withdrew 73,303 vs typical 4,574",1,T0054563
+large_withdrawal,"M00103 withdrew 12,771 vs typical 842",1,T0054564
+large_withdrawal,"M00733 withdrew 78,809 vs typical 3,982",1,T0054565
+large_withdrawal,"M01438 withdrew 120,873 vs typical 6,612",1,T0054566
+large_withdrawal,"M00687 withdrew 49,148 vs typical 3,006",1,T0054567
+large_withdrawal,"M01167 withdrew 74,478 vs typical 4,803",1,T0054568
+large_withdrawal,"M00593 withdrew 62,176 vs typical 3,100",1,T0054569
+dormant_account_raid,"M00720 dormant 200+ days, then withdrew 22,963",1,T0054570
+dormant_account_raid,"M00666 dormant 200+ days, then withdrew 16,915",1,T0054571
+dormant_account_raid,"M01024 dormant 200+ days, then withdrew 145,015",1,T0054572
+dormant_account_raid,"M00268 dormant 200+ days, then withdrew 64,916",1,T0054573
+dormant_account_raid,"M01115 dormant 200+ days, then withdrew 40,536",1,T0054574
+dormant_account_raid,"M01359 dormant 200+ days, then withdrew 31,967",1,T0054575
+dormant_account_raid,"M00251 dormant 200+ days, then withdrew 113,273",1,T0054576
+dormant_account_raid,"M00219 dormant 200+ days, then withdrew 17,629",1,T0054577
+dormant_account_raid,"M00900 dormant 200+ days, then withdrew 14,739",1,T0054578
+dormant_account_raid,"M01268 dormant 200+ days, then withdrew 295,805",1,T0054579
+duplicate_transaction,"M00604 sent 15,500 to Nancy Mutua twice same day",2,T0054580;T0054581
+duplicate_transaction,"M00262 sent 41,800 to Michael Muthoni twice same day",2,T0054582;T0054583
+duplicate_transaction,"M00050 sent 22,600 to Alice Mwangi twice same day",2,T0054584;T0054585
+duplicate_transaction,"M00911 sent 7,600 to Ann Adhiambo twice same day",2,T0054586;T0054587
+duplicate_transaction,"M01078 sent 52,000 to Everlyne Muthoni twice same day",2,T0054588;T0054589
+duplicate_transaction,"M00648 sent 49,300 to Paul Maina twice same day",2,T0054590;T0054591
+duplicate_transaction,"M00561 sent 40,800 to James Ndungu twice same day",2,T0054592;T0054593
+duplicate_transaction,"M01049 sent 33,200 to Francis Gitau twice same day",2,T0054594;T0054595
+duplicate_transaction,"M00235 sent 16,100 to Emily Onyango twice same day",2,T0054596;T0054597
+duplicate_transaction,"M00261 sent 57,700 to Kennedy Wekesa twice same day",2,T0054598;T0054599
+rapid_transfers,M00338 made 8 outgoing transfers within ~45 minutes,8,T0054600;T0054601;T0054602;T0054603;T0054604;T0054605;T0054606;T0054607
+rapid_transfers,M01044 made 9 outgoing transfers within ~45 minutes,9,T0054608;T0054609;T0054610;T0054611;T0054612;T0054613;T0054614;T0054615;T0054616
+rapid_transfers,M00893 made 6 outgoing transfers within ~45 minutes,6,T0054617;T0054618;T0054619;T0054620;T0054621;T0054622
+rapid_transfers,M01149 made 7 outgoing transfers within ~45 minutes,7,T0054623;T0054624;T0054625;T0054626;T0054627;T0054628;T0054629
+rapid_transfers,M00918 made 9 outgoing transfers within ~45 minutes,9,T0054630;T0054631;T0054632;T0054633;T0054634;T0054635;T0054636;T0054637;T0054638
+rapid_transfers,M00341 made 6 outgoing transfers within ~45 minutes,6,T0054639;T0054640;T0054641;T0054642;T0054643;T0054644
+rapid_transfers,M00767 made 7 outgoing transfers within ~45 minutes,7,T0054645;T0054646;T0054647;T0054648;T0054649;T0054650;T0054651
+rapid_transfers,M01068 made 6 outgoing transfers within ~45 minutes,6,T0054652;T0054653;T0054654;T0054655;T0054656;T0054657
+rapid_transfers,M00657 made 8 outgoing transfers within ~45 minutes,8,T0054658;T0054659;T0054660;T0054661;T0054662;T0054663;T0054664;T0054665
+rapid_transfers,M00533 made 8 outgoing transfers within ~45 minutes,8,T0054666;T0054667;T0054668;T0054669;T0054670;T0054671;T0054672;T0054673
+employee_loan_approval_anomaly,Officer EMP0036 approved 25 extra loans (well above peer average) over 5 months,26,L00601;L00602;L00603;L00604;L00605;L00606;L00607;L00608;L00609;L00610;L00611;L00612;L00613;L00614;L00615;L00616;L00617;L00618;L00619;L00620;L00621;L00622;L00623;L00624;L00625;EMP0036
+repeated_guarantor,Member M00065 guarantees 18 unrelated loans,19,L00626;L00627;L00628;L00629;L00630;L00631;L00632;L00633;L00634;L00635;L00636;L00637;L00638;L00639;L00640;L00641;L00642;L00643;M00065
+weekend_offhours_approval,15 loans approved on weekends or outside business hours,15,L00644;L00645;L00646;L00647;L00648;L00649;L00650;L00651;L00652;L00653;L00654;L00655;L00656;L00657;L00658
+same_day_disbursement_withdrawal,10 loans withdrawn in full within hours of disbursement,10,L00659/T0054674;L00660/T0054675;L00661/T0054676;L00662/T0054677;L00663/T0054678;L00664/T0054679;L00665/T0054680;L00666/T0054681;L00667/T0054682;L00668/T0054683

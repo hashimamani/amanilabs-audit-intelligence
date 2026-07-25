@@ -1,0 +1,47 @@
+employee_id,name,role,branch_id,hire_date
+EMP0001,Alice Chebet,Loan Officer,BR001,2022-05-23
+EMP0002,Elijah Barasa,Teller,BR001,2020-08-05
+EMP0003,Felix Kilonzo,Branch Manager,BR001,2023-05-29
+EMP0004,Rebecca Maina,Branch Manager,BR002,2020-06-18
+EMP0005,Nancy Wamalwa,Teller,BR002,2024-11-07
+EMP0006,Grace Omondi,Loan Officer,BR003,2021-04-19
+EMP0007,Lilian Odhiambo,Loan Officer,BR003,2022-02-25
+EMP0008,Joyce Njoroge,Branch Manager,BR003,2022-02-05
+EMP0009,Diana Adhiambo,Loan Officer,BR003,2023-11-08
+EMP0010,Esther Njoroge,Loan Officer,BR004,2022-08-12
+EMP0011,Judith Chebet,Teller,BR004,2023-02-22
+EMP0012,Emily Kamau,Teller,BR005,2021-04-22
+EMP0013,James Kiptoo,Teller,BR005,2025-02-21
+EMP0014,Charles Maina,Teller,BR005,2024-12-24
+EMP0015,Samuel Cheruiyot,Branch Manager,BR005,2024-03-13
+EMP0016,Beatrice Wamalwa,Teller,BR006,2023-04-18
+EMP0017,Samuel Koech,Teller,BR006,2022-10-15
+EMP0018,Ann Kariuki,Loan Officer,BR006,2020-12-01
+EMP0019,Michael Achieng,Loan Officer,BR006,2022-12-27
+EMP0020,Faith Omondi,Loan Officer,BR007,2024-12-25
+EMP0021,Agnes Odhiambo,Teller,BR007,2021-09-01
+EMP0022,Martin Wamalwa,Loan Officer,BR007,2024-01-21
+EMP0023,Faith Langat,Loan Officer,BR007,2023-07-12
+EMP0024,Elijah Njoroge,Loan Officer,BR008,2023-01-17
+EMP0025,Winnie Mwangi,Loan Officer,BR008,2020-08-25
+EMP0026,Paul Wamalwa,Teller,BR008,2023-03-15
+EMP0027,Damaris Otieno,Loan Officer,BR008,2024-04-14
+EMP0028,Caroline Njoroge,Loan Officer,BR009,2021-07-04
+EMP0029,Rebecca Rotich,Branch Manager,BR009,2024-04-03
+EMP0030,Geoffrey Kariuki,Teller,BR010,2022-02-11
+EMP0031,Paul Otieno,Branch Manager,BR010,2021-12-01
+EMP0032,Mary Otieno,Loan Officer,BR010,2023-12-28
+EMP0033,Robert Kamau,Loan Officer,BR010,2024-11-03
+EMP0034,Charles Kiptoo,Loan Officer,BR011,2023-01-17
+EMP0035,Charles Ndungu,Branch Manager,BR011,2022-04-21
+EMP0036,Joyce Nyambura,Loan Officer,BR012,2022-04-29
+EMP0037,Judith Odhiambo,Loan Officer,BR012,2020-05-12
+EMP0038,Faith Cheruiyot,Teller,BR013,2021-02-04
+EMP0039,Joseph Mutua,Branch Manager,BR013,2022-08-13
+EMP0040,Felix Langat,Loan Officer,BR013,2023-02-09
+EMP0041,Caroline Gitau,Loan Officer,BR013,2020-02-08
+EMP0042,Charles Kiptoo,Loan Officer,BR014,2024-11-13
+EMP0043,John Maina,Loan Officer,BR014,2021-07-05
+EMP0044,Mercy Ndungu,Branch Manager,BR015,2023-02-20
+EMP0045,Daniel Kamau,Loan Officer,BR015,2023-04-09
+EMP0046,Grace Kamau,Loan Officer,BR015,2023-04-19

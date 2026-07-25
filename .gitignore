@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+.DS_Store
+audit_intelligence/backend/data/uploads/
