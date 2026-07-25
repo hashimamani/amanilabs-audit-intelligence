@@ -3,4 +3,5 @@ __pycache__/
 *.pyc
 *.db
 .DS_Store
+.pytest_cache/
 audit_intelligence/backend/data/uploads/
