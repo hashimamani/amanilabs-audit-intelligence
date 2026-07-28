@@ -233,12 +233,44 @@ are members with only 3 total withdrawals — considered correct
 "insufficient history" behavior, not a defect.
 
 Noise: ~75 flagged entity IDs out of ~226 total don't trace to any
-injected scenario. Not yet individually audited — some is expected
-(synthetic baseline data has natural statistical outliers even without
-injected fraud, which is realistic), but this hasn't been broken down
-rule-by-rule yet. **Worth doing before a real demo**: rerun the validation
-harness, sample a few "noise" flags per rule, and sanity-check whether
-they look like reasonable anomalies or generator artifacts.
+injected scenario per the original harness's definition. **This was
+individually audited** (`backend/noise_audit.py`, new) and the raw
+75/226 figure turned out to be mostly a measurement artifact, not real
+false positives:
+
+- `validate_against_ground_truth.py` always adds a flag's `member_id` to
+  the set being checked against `injected_ids`. But `ground_truth.json`
+  only logs member ids as `record_ids` for scenarios 5/6
+  (`employee_loan_approval_anomaly`, `repeated_guarantor` — see section 3's
+  note on anchor entity ids). For every other scenario (1-4, 7, 8), a flag
+  can correctly match its injected transaction/loan id and *still* show
+  its member_id as "untraceable," because ground truth simply never logged
+  that member id at all. That accounts for 69 of the 75 untraceable ids.
+- Filtering to flags whose **entity_id** (the actual transaction/loan/
+  employee/member the flag is about) matches no injected record at all —
+  the real definition of "organic, non-injected flag" — leaves only **6
+  flags out of 85** (7%):
+  - 1 `same_day_disbursement_withdrawal` flag (loan L00237, 170% of the
+    disbursement withdrawn within 24h — plausible, if unusually high;
+    the >100% figure means other pre-existing balance was withdrawn
+    alongside the loan proceeds in the same window, not a bug).
+  - 3 `repeated_guarantor` flags, each at exactly the default threshold
+    (5 loans guaranteed) — plausible natural variation given ~1,336
+    guarantor links spread across 1,500 members.
+  - 2 `employee_loan_approval_anomaly` flags (EMP0041 at 1.9x and EMP0042
+    at 1.5x their next-highest branch peer), both via the small-branch
+    ratio fallback (branches BR013/BR014 have <3 loan officers — 25 loan
+    officers are spread across 15 branches company-wide, so most branches
+    fall into this fallback path). Consistent with the known tradeoff
+    documented in section 5 item 5 and section 6 item 2: ratio comparisons
+    on 2-3 data points are noisier than z-scores on larger peer groups.
+    Not a bug — a known, accepted cost of the hybrid approach that made
+    detection of the actual injected officer (EMP0036) possible at all.
+
+All 6 organic flags have a plausible, explainable reason to fire — none
+look like generator artifacts or engine bugs. No thresholds were changed
+as a result of this audit (per the project's rule: only change fraud
+pattern behavior for real-world realism, never to tune a metric).
 
 ## 7. Explicit non-goals / deferred scope (don't build these yet)
 
@@ -295,10 +327,7 @@ they look like reasonable anomalies or generator artifacts.
 1. UI polish / additional frontend features beyond the MVP three views
    (upload, case list, case detail) — e.g. bulk case status updates,
    evidence export, a dashboard/summary view across runs.
-2. Individually audit the ~75 "noise" flags per rule (see section 6) —
-   worth doing before a real demo so the founder can speak to every flag
-   a prospect might click on.
-3. Decide multi-tenancy model whenever there's a concrete second-tenant
+2. Decide multi-tenancy model whenever there's a concrete second-tenant
    need — still explicitly undecided, not blocking anything right now.
 
 ## 10. Working style established so far (please continue it)
