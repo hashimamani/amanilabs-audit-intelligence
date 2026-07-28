@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: audit_intelligence
+      POSTGRES_PASSWORD: audit_intelligence
+      POSTGRES_DB: audit_intelligence
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U audit_intelligence"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: audit_intelligence/backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://audit_intelligence:audit_intelligence@postgres:5432/audit_intelligence
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_uploads:/app/audit_intelligence/backend/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: audit_intelligence/frontend/Dockerfile
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  backend_uploads:

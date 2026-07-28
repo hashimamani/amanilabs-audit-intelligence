@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+.pytest_cache/
+audit_intelligence/backend/data/uploads/
+audit_intelligence/frontend/node_modules/
+audit_intelligence/frontend/dist/
+.git/
+.DS_Store

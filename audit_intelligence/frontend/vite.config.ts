@@ -6,9 +6,13 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    host: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        // In docker-compose the frontend and backend are separate containers,
+        // so 127.0.0.1 doesn't reach the backend - VITE_API_PROXY_TARGET
+        // overrides it to the backend service name in that environment.
+        target: process.env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:8000',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },

@@ -33,13 +33,15 @@ build order is deliberately:
    engine actually catches things before anyone sees real data.
 2. **Rule engine** (done, validated) — 8 explainable rules producing
    Flag objects with severity/evidence/explanation/suggested steps.
-3. **Case generation** (NOT built yet — next step) — group flags into
-   investigation cases per the original spec (Case ID, risk score,
-   triggered rules, evidence, timeline, related members/employees/
-   transactions, AI summary placeholder, recommended actions, status).
-4. **FastAPI backend** (not built) — wraps engine + case store, Postgres.
-5. **React frontend** (not built) — upload, ranked case list, case detail.
-6. **Docker Compose** (not built).
+3. **Case generation** (done) — flags grouped into investigation cases
+   (Case ID, risk score, triggered rules, evidence, timeline, related
+   entities, status, assigned auditor, notes, outcome). AI summary field
+   exists on the case row but is unpopulated — deferred per section 7.
+4. **FastAPI backend** (done) — upload/analysis-run/case CRUD endpoints,
+   SQLAlchemy ORM, SQLite locally / Postgres in Docker (see section 8).
+5. **React frontend** (done) — upload flow, ranked case list, case detail
+   view with evidence/timeline display.
+6. **Docker Compose** (done) — backend + frontend + Postgres, see section 8.
 
 Do not skip ahead to AI summarization, RBAC, multi-tenancy, or the full
 data-source connector list (SQL Server/MySQL/Postgres live connections) —
@@ -251,25 +253,55 @@ they look like reasonable anomalies or generator artifacts.
 - Full Clean Architecture / DDD ceremony — repository pattern is worth
   doing now; formal bounded contexts/domain events are premature
 
-## 8. Immediate next steps (in order)
+## 8. Docker Compose + Postgres (done)
 
-1. Add `requirements.txt` / `pyproject.toml`, and convert
-   `validate_against_ground_truth.py`'s checks into real pytest tests
-   under `backend/tests/`.
-2. **Case generation layer**: group Flags into investigation cases (Case
-   ID, risk score derived from constituent flags, triggered rules,
-   evidence, timeline, related members/employees/transactions, status,
-   assigned auditor, notes, outcome — per original spec). Decide grouping
-   logic (e.g. same member within a time window = one case?) explicitly
-   and document the reasoning.
-3. Decide multi-tenancy model before writing the DB schema.
-4. FastAPI backend: endpoints for upload, run analysis, list/get cases,
-   update case status/notes. SQLAlchemy + Alembic + Postgres.
-5. React + TypeScript + Tailwind frontend: upload flow, ranked case list,
-   case detail view with evidence display.
-6. Docker Compose to run backend + frontend + Postgres together.
+- `docker-compose.yml` at repo root runs three services: `postgres`
+  (postgres:16-alpine), `backend` (FastAPI/uvicorn), `frontend` (Vite dev
+  server, not a production build — see below). `docker compose up -d`
+  brings up the full stack; backend on :8000, frontend on :5173, postgres
+  on :5432.
+- `app/core/db.py` now reads `DATABASE_URL` from the environment, falling
+  back to the existing local SQLite file when unset. docker-compose sets
+  it to a `postgresql+psycopg://` URL; local `python -m uvicorn` runs
+  outside Docker are untouched and still use SQLite with zero setup. This
+  was the actual "SQLite -> Postgres migration" decision: don't force
+  Postgres on local dev, just make it swappable, since `db/models.py`
+  already avoided any dialect-specific column types (plain JSON columns,
+  no SQLite- or Postgres-only types) so no schema changes were needed for
+  the swap to work.
+- The frontend Dockerfile runs the same `npm run dev` Vite dev server as
+  local development, not an nginx/production build — deliberate, since
+  there's no deployment target yet (pre-pilot) and a second frontend code
+  path (dev vs. prod build) isn't worth the complexity until one exists.
+  `vite.config.ts`'s proxy target is now read from `VITE_API_PROXY_TARGET`
+  (compose sets it to `http://backend:8000`; local dev is unaffected,
+  defaults to `127.0.0.1:8000`).
+- Verified end-to-end: built both images, brought the stack up, ran a real
+  `/analysis/run` through the containerized backend, confirmed the rows
+  landed in the Postgres container via `psql` (not just a 200 response),
+  and loaded the case list + a case detail page in a real browser against
+  the dockerized frontend/backend. Local (non-Docker) pytest suite (14/14)
+  and the SQLite dev path were re-verified unaffected after the change.
+- Uploaded datasets persist via a named volume
+  (`backend_uploads` -> `/app/audit_intelligence/backend/data/uploads`)
+  so they survive container restarts; Postgres data likewise persists via
+  `postgres_data`.
+- Multi-tenancy: still not decided, and still not needed — the Postgres
+  schema that shipped is the same single-tenant schema from before, per
+  section 7's deferred-scope list. Not addressed by this change.
 
-## 9. Working style established so far (please continue it)
+## 9. Immediate next steps (in order)
+
+1. UI polish / additional frontend features beyond the MVP three views
+   (upload, case list, case detail) — e.g. bulk case status updates,
+   evidence export, a dashboard/summary view across runs.
+2. Individually audit the ~75 "noise" flags per rule (see section 6) —
+   worth doing before a real demo so the founder can speak to every flag
+   a prospect might click on.
+3. Decide multi-tenancy model whenever there's a concrete second-tenant
+   need — still explicitly undecided, not blocking anything right now.
+
+## 10. Working style established so far (please continue it)
 
 - Build in small validated layers: implement -> test against something
   concrete (ground truth, real output) -> fix real failures -> report
