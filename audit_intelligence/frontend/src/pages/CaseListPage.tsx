@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ApiError, listCases } from "../api/client";
 import type { CaseSummary, Severity } from "../api/types";
 import { SeverityBadge } from "../components/SeverityBadge";
@@ -11,8 +11,16 @@ export function CaseListPage() {
   const [cases, setCases] = useState<CaseSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [severity, setSeverity] = useState<string>("");
-  const [status, setStatus] = useState<string>("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const severity = searchParams.get("severity") ?? "";
+  const status = searchParams.get("status") ?? "";
+
+  function setFilter(key: "severity" | "status", value: string) {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setSearchParams(next);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -56,7 +64,7 @@ export function CaseListPage() {
       <div className="flex gap-3">
         <select
           value={severity}
-          onChange={(e) => setSeverity(e.target.value)}
+          onChange={(e) => setFilter("severity", e.target.value)}
           className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
         >
           <option value="">All severities</option>
@@ -68,7 +76,7 @@ export function CaseListPage() {
         </select>
         <select
           value={status}
-          onChange={(e) => setStatus(e.target.value)}
+          onChange={(e) => setFilter("status", e.target.value)}
           className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
         >
           <option value="">All statuses</option>

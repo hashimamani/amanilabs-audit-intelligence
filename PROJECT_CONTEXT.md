@@ -322,15 +322,55 @@ pattern behavior for real-world realism, never to tune a metric).
   schema that shipped is the same single-tenant schema from before, per
   section 7's deferred-scope list. Not addressed by this change.
 
-## 9. Immediate next steps (in order)
+## 9. UI polish: dashboard view (done)
 
-1. UI polish / additional frontend features beyond the MVP three views
-   (upload, case list, case detail) — e.g. bulk case status updates,
-   evidence export, a dashboard/summary view across runs.
-2. Decide multi-tenancy model whenever there's a concrete second-tenant
+- Added `frontend/src/pages/DashboardPage.tsx` as the new `/` landing
+  route (moved the old case-list view from `/` to `/cases`, updated
+  `Layout.tsx` nav to Dashboard / Cases / Upload & Analyze, and fixed the
+  two other places that linked to the old `/` case-list — CaseDetailPage's
+  "Back to cases" and UploadPage's post-run "View cases" button — so they
+  now go to `/cases`).
+- Shows the latest run's stats (flags raised, cases opened, Critical+High
+  count, still-open count), a severity breakdown bar, a status breakdown,
+  most-triggered rules, and the top 5 highest-risk cases — all computed
+  client-side from the existing `/analysis/runs` and `/cases` endpoints,
+  no new backend endpoint. Deliberately not building a dedicated stats
+  endpoint yet: case volumes are in the dozens for the foreseeable
+  pre-pilot future, and the existing `/cases` endpoint's max page size
+  (200) covers that with room to spare - revisit if real pilot data pushes
+  case counts into the thousands.
+- `CaseListPage` now reads/writes its severity and status filters via
+  `useSearchParams` (was local `useState`) so dashboard tiles can deep-link
+  into a pre-filtered case list (e.g. clicking "Critical" goes to
+  `/cases?severity=Critical`), and the filtered view is a real shareable
+  URL.
+- Verified in a real browser end-to-end: ran a fresh analysis from empty
+  state, confirmed dashboard stats matched the run response exactly,
+  clicked through a severity-filtered deep link into Cases, opened a case,
+  and confirmed "Back to cases" returns to the unfiltered list. Backend
+  pytest suite (14/14) re-verified unaffected (no backend changes in this
+  piece).
+- **Known pre-existing issue, not introduced here and not fixed**:
+  `npm run build` (`tsc -b && vite build`) fails on `src/api/client.ts`'s
+  `ApiError` class - `erasableSyntaxOnly` in `tsconfig.app.json` rejects
+  TypeScript parameter-property syntax (`constructor(public status: ...)`).
+  This predates this session (present since the initial frontend commit)
+  and blocks production builds; dev (`npm run dev`, what's been used for
+  all verification so far including this piece) is unaffected since Vite's
+  dev server doesn't run a full `tsc` pass. Worth a small follow-up fix
+  before Docker Compose or any real deploy relies on a production build
+  instead of the dev server.
+
+## 10. Immediate next steps (in order)
+
+1. Fix the `client.ts` / `erasableSyntaxOnly` build break (section 9) so
+   `npm run build` actually works — small, contained fix.
+2. Further UI polish if there's appetite: bulk case status updates,
+   evidence export.
+3. Decide multi-tenancy model whenever there's a concrete second-tenant
    need — still explicitly undecided, not blocking anything right now.
 
-## 10. Working style established so far (please continue it)
+## 11. Working style established so far (please continue it)
 
 - Build in small validated layers: implement -> test against something
   concrete (ground truth, real output) -> fix real failures -> report

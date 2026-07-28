@@ -1,7 +1,8 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 
 const NAV_ITEMS = [
-  { to: "/", label: "Cases" },
+  { to: "/", label: "Dashboard" },
+  { to: "/cases", label: "Cases" },
   { to: "/upload", label: "Upload & Analyze" },
 ];
 
@@ -19,7 +20,7 @@ export function Layout() {
             {NAV_ITEMS.map((item) => {
               const active =
                 item.to === "/"
-                  ? location.pathname === "/" || location.pathname.startsWith("/cases")
+                  ? location.pathname === "/"
                   : location.pathname.startsWith(item.to);
               return (
                 <Link

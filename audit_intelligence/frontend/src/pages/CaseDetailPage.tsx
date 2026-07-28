@@ -85,7 +85,7 @@ export function CaseDetailPage() {
 
   return (
     <div className="space-y-6">
-      <Link to="/" className="text-sm text-slate-500 hover:text-slate-700">
+      <Link to="/cases" className="text-sm text-slate-500 hover:text-slate-700">
         &larr; Back to cases
       </Link>
 

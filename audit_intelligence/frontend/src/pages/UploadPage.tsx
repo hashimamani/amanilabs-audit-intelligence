@@ -153,7 +153,7 @@ export function UploadPage() {
             </div>
           </dl>
           <button
-            onClick={() => navigate("/")}
+            onClick={() => navigate("/cases")}
             className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
           >
             View cases
