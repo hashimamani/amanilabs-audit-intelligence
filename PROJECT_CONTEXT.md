@@ -350,24 +350,23 @@ pattern behavior for real-world realism, never to tune a metric).
   and confirmed "Back to cases" returns to the unfiltered list. Backend
   pytest suite (14/14) re-verified unaffected (no backend changes in this
   piece).
-- **Known pre-existing issue, not introduced here and not fixed**:
-  `npm run build` (`tsc -b && vite build`) fails on `src/api/client.ts`'s
-  `ApiError` class - `erasableSyntaxOnly` in `tsconfig.app.json` rejects
-  TypeScript parameter-property syntax (`constructor(public status: ...)`).
-  This predates this session (present since the initial frontend commit)
-  and blocks production builds; dev (`npm run dev`, what's been used for
-  all verification so far including this piece) is unaffected since Vite's
-  dev server doesn't run a full `tsc` pass. Worth a small follow-up fix
-  before Docker Compose or any real deploy relies on a production build
-  instead of the dev server.
+- **`npm run build` fix (done)**: `src/api/client.ts`'s `ApiError` class
+  used a TypeScript parameter-property constructor
+  (`constructor(public status: number, message: string)`), which
+  `erasableSyntaxOnly` in `tsconfig.app.json` rejects (that flag requires
+  code that's valid after simply stripping types, and parameter properties
+  emit actual field-assignment code, not just type annotations). Fixed by
+  declaring `status: number` as a normal class field and assigning it in
+  the constructor body instead. `npm run build` (`tsc -b && vite build`)
+  now succeeds and `vite preview` serves the built `dist/` correctly.
+  Pre-existing pytest suite (14/14, backend-only, unaffected by this
+  frontend change) re-verified passing after the fix.
 
 ## 10. Immediate next steps (in order)
 
-1. Fix the `client.ts` / `erasableSyntaxOnly` build break (section 9) so
-   `npm run build` actually works — small, contained fix.
-2. Further UI polish if there's appetite: bulk case status updates,
+1. Further UI polish if there's appetite: bulk case status updates,
    evidence export.
-3. Decide multi-tenancy model whenever there's a concrete second-tenant
+2. Decide multi-tenancy model whenever there's a concrete second-tenant
    need — still explicitly undecided, not blocking anything right now.
 
 ## 11. Working style established so far (please continue it)
