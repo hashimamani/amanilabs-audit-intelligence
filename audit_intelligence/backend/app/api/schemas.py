@@ -72,6 +72,13 @@ class CaseUpdateIn(BaseModel):
     add_note: str | None = None
 
 
+class TenantOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    slug: str
+    name: str
+
+
 class UploadOut(BaseModel):
     dataset_id: str
     files_received: list[str]

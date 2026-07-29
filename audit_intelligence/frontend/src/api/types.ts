@@ -85,6 +85,11 @@ export interface RunSummary {
   case_count: number;
 }
 
+export interface TenantInfo {
+  slug: string;
+  name: string;
+}
+
 export const REQUIRED_UPLOAD_FILES = [
   "members.csv",
   "branches.csv",

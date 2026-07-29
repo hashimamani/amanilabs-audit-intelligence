@@ -3,6 +3,7 @@ import type {
   CaseSummary,
   CaseUpdate,
   RunSummary,
+  TenantInfo,
   UploadResult,
 } from "./types";
 
@@ -88,6 +89,10 @@ export function updateCase(id: number, payload: CaseUpdate): Promise<CaseDetail>
     method: "PATCH",
     body: JSON.stringify(payload),
   });
+}
+
+export function getCurrentTenant(): Promise<TenantInfo> {
+  return request("/tenant/me");
 }
 
 export { ApiError };
