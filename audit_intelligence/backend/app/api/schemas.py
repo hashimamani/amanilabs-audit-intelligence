@@ -72,6 +72,15 @@ class CaseUpdateIn(BaseModel):
     add_note: str | None = None
 
 
+class BulkCaseStatusIn(BaseModel):
+    case_ids: list[int]
+    status: str
+
+
+class BulkCaseStatusOut(BaseModel):
+    updated_count: int
+
+
 class TenantOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -4,7 +4,13 @@ from sqlalchemy.orm import Session
 from app.core.db import get_db
 from app.core.tenancy import get_current_tenant
 from app.db.models import CaseORM, AnalysisRunORM, TenantORM
-from app.api.schemas import CaseSummaryOut, CaseDetailOut, CaseUpdateIn
+from app.api.schemas import (
+    CaseSummaryOut,
+    CaseDetailOut,
+    CaseUpdateIn,
+    BulkCaseStatusIn,
+    BulkCaseStatusOut,
+)
 
 router = APIRouter(prefix="/cases", tags=["cases"])
 
@@ -65,6 +71,24 @@ def list_cases(
 
     rows = q.order_by(CaseORM.risk_score.desc()).offset(offset).limit(limit).all()
     return [_to_summary(r) for r in rows]
+
+
+@router.patch("/bulk-status", response_model=BulkCaseStatusOut)
+def bulk_update_status(
+    payload: BulkCaseStatusIn,
+    db: Session = Depends(get_db),
+    tenant: TenantORM = Depends(get_current_tenant),
+):
+    if not payload.case_ids:
+        return BulkCaseStatusOut(updated_count=0)
+
+    updated = (
+        db.query(CaseORM)
+        .filter(CaseORM.id.in_(payload.case_ids), CaseORM.tenant_id == tenant.id)
+        .update({"status": payload.status}, synchronize_session=False)
+    )
+    db.commit()
+    return BulkCaseStatusOut(updated_count=updated)
 
 
 @router.get("/{case_id}", response_model=CaseDetailOut)

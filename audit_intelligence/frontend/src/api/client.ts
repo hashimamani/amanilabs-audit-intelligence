@@ -91,6 +91,20 @@ export function updateCase(id: number, payload: CaseUpdate): Promise<CaseDetail>
   });
 }
 
+export interface BulkStatusResult {
+  updated_count: number;
+}
+
+export function bulkUpdateCaseStatus(
+  caseIds: number[],
+  status: string,
+): Promise<BulkStatusResult> {
+  return request("/cases/bulk-status", {
+    method: "PATCH",
+    body: JSON.stringify({ case_ids: caseIds, status }),
+  });
+}
+
 export function getCurrentTenant(): Promise<TenantInfo> {
   return request("/tenant/me");
 }

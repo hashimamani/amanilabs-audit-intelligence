@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { ApiError, getCase, updateCase } from "../api/client";
 import type { CaseDetail } from "../api/types";
 import { SeverityBadge } from "../components/SeverityBadge";
+import { downloadCsv } from "../lib/csv";
 
 const STATUSES = ["Open", "In Progress", "Closed"];
 
@@ -78,6 +79,42 @@ export function CaseDetailPage() {
     }
   }
 
+  function handleExportEvidence() {
+    if (!caseData) return;
+    const header = [
+      "Case",
+      "Subject",
+      "Subject ID",
+      "Rule",
+      "Rule ID",
+      "Flag Severity",
+      "Explanation",
+      "Evidence Label",
+      "Evidence Value",
+      "Triggered At",
+    ];
+    const rows: string[][] = [];
+    for (const flag of caseData.flags) {
+      const base = [
+        caseData.case_ref,
+        caseData.subject_name,
+        caseData.subject_id,
+        flag.rule_name,
+        flag.rule_id,
+        flag.severity,
+        flag.explanation,
+      ];
+      if (flag.evidence.length === 0) {
+        rows.push([...base, "", "", flag.triggered_at ?? ""]);
+      } else {
+        for (const e of flag.evidence) {
+          rows.push([...base, e.label, e.value, flag.triggered_at ?? ""]);
+        }
+      }
+    }
+    downloadCsv(`${caseData.case_ref}-evidence.csv`, [header, ...rows]);
+  }
+
   if (loading) return <p className="text-sm text-slate-500">Loading...</p>;
   if (error && !caseData)
     return <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>;
@@ -99,6 +136,12 @@ export function CaseDetailPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            onClick={handleExportEvidence}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Download evidence (CSV)
+          </button>
           <SeverityBadge severity={caseData.severity} />
           <span className="text-2xl font-semibold text-slate-900">
             {caseData.risk_score.toFixed(1)}

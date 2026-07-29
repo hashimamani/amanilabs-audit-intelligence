@@ -365,8 +365,10 @@ pattern behavior for real-world realism, never to tune a metric).
 
 ## 10. Immediate next steps (in order)
 
-1. Further UI polish if there's appetite: bulk case status updates,
-   evidence export.
+1. Production frontend build/deploy path — `docker-compose.yml` still runs
+   `npm run dev` in every environment (see section 8's note on this being
+   a deliberate pre-pilot call); worth revisiting now that a real SACCO
+   pilot exists.
 2. Login/RBAC whenever there's a real need for it beyond one API key per
    tenant (still explicitly deferred, see section 7/12).
 
@@ -456,3 +458,47 @@ deferred per section 7 pending a concrete need).
   (frontend + backend + Postgres) rebuilt and re-verified against the new
   schema, including confirming the dockerized frontend's baked-in
   `VITE_TENANT_KEY` reaches the backend through the proxy.
+
+## 13. Bulk case status updates + CSV evidence export (done)
+
+Pilot-facing UI polish: auditors previously updated one case at a time and
+had no way to hand data to someone outside the app.
+
+- **Bulk status update**: `PATCH /cases/bulk-status` (`app/api/routes/
+  cases.py`) takes `{case_ids, status}`, filtered by both `id IN (...)` AND
+  `tenant_id == tenant.id` — a foreign case id slipped into the payload is
+  silently excluded, not updated, same isolation guarantee as every other
+  route. No status-value validation, matching the existing single-case
+  `PATCH /cases/{id}` (frontend dropdown is the only constraint on valid
+  values, consistent with before). Declared before `/{case_id}` in the
+  route file - Starlette matches path shape before doing the `int` param
+  conversion, so `bulk-status` would otherwise 422 by first matching
+  `PATCH /{case_id}` and failing to parse `"bulk-status"` as an int.
+  `CaseListPage.tsx` adds row/select-all checkboxes and a small bulk-action
+  bar (status dropdown + Apply + Clear) that appears once >=1 row is
+  selected; selection resets whenever the case list reloads so it can't
+  reference stale rows after a filter change.
+- **CSV export, not PDF/board report**: deliberately chosen over a
+  formatted PDF - a board-report-style export would edge into "board
+  reports," which section 7 explicitly defers. CSV is raw auditor data.
+  Both exports are built client-side from data the pages already have
+  loaded (no new backend endpoint) via a small hand-rolled `src/lib/csv.ts`
+  (quote/escape + Blob-download helper, no new dependency):
+  - List-level: "Export CSV" on `CaseListPage.tsx`, one row per
+    currently-filtered case (summary fields only).
+  - Per-case: "Download evidence (CSV)" on `CaseDetailPage.tsx`, one row
+    per (flag, evidence-item) pair for that case, with case/flag context
+    repeated per row; a flag with zero evidence items still emits one row
+    so it isn't silently dropped from the export.
+- **Verified**: new `tests/test_cases_bulk.py` (bulk update changes only
+  the targeted cases; a case id from a second tenant included in the
+  payload is excluded from `updated_count` and left untouched; empty
+  `case_ids` is a no-op) - full suite 22/22. In the browser against a real
+  backend: selected 3 cases, applied a bulk status change, confirmed the
+  table reflected it after reload; verified actual CSV *content* (not just
+  "no console error") for both exports by temporarily wrapping
+  `URL.createObjectURL` via `javascript_tool` to capture the Blob text
+  before the download fired - confirmed correct headers, correct rows, and
+  correct comma/quote escaping (e.g. `"KSh 62,176"`) in both. `npm run
+  build` re-verified passing (this project's known regression point - see
+  the earlier `erasableSyntaxOnly` fix in section 9).
