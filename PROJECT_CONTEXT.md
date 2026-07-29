@@ -420,6 +420,13 @@ deferred per section 7 pending a concrete need).
   how the real second SACCO gets onboarded. Deliberately a CLI, not an
   admin UI: fine for a handful of pilot tenants by hand, revisit if/when
   self-service onboarding is actually needed.
+- **Tenant display**: `GET /tenant/me` resolves the header to `{slug,
+  name}` via the same `get_current_tenant` dependency every other route
+  uses, so the frontend nav bar (`Layout.tsx`) can show which tenant
+  you're looking at. Deliberately not a second `VITE_` env var alongside
+  the key — deriving the name from the key server-side means it can't
+  drift out of sync with what's actually authenticated (e.g. after
+  rotating a key or renaming a tenant in the DB).
 - **Upload isolation**: uploaded datasets are stored under
   `UPLOADS_DIR / tenant.slug / dataset_id` (was flat `UPLOADS_DIR /
   dataset_id`) so one tenant can't address another's uploaded dataset even
