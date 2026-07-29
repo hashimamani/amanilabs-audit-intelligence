@@ -2,14 +2,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.db.models import CaseORM, AnalysisRunORM
+from app.core.tenancy import get_current_tenant
+from app.db.models import CaseORM, AnalysisRunORM, TenantORM
 from app.api.schemas import CaseSummaryOut, CaseDetailOut, CaseUpdateIn
 
 router = APIRouter(prefix="/cases", tags=["cases"])
 
 
-def _latest_run_id(db: Session) -> int | None:
-    latest = db.query(AnalysisRunORM).order_by(AnalysisRunORM.created_at.desc()).first()
+def _latest_run_id(db: Session, tenant_id: int) -> int | None:
+    latest = (
+        db.query(AnalysisRunORM)
+        .filter(AnalysisRunORM.tenant_id == tenant_id)
+        .order_by(AnalysisRunORM.created_at.desc())
+        .first()
+    )
     return latest.id if latest else None
 
 
@@ -40,12 +46,16 @@ def list_cases(
     limit: int = Query(50, le=200),
     offset: int = 0,
     db: Session = Depends(get_db),
+    tenant: TenantORM = Depends(get_current_tenant),
 ):
-    effective_run_id = run_id if run_id is not None else _latest_run_id(db)
+    effective_run_id = run_id if run_id is not None else _latest_run_id(db, tenant.id)
     if effective_run_id is None:
         return []
 
-    q = db.query(CaseORM).filter(CaseORM.run_id == effective_run_id)
+    q = db.query(CaseORM).filter(
+        CaseORM.run_id == effective_run_id,
+        CaseORM.tenant_id == tenant.id,
+    )
     if status:
         q = q.filter(CaseORM.status == status)
     if severity:
@@ -58,16 +68,25 @@ def list_cases(
 
 
 @router.get("/{case_id}", response_model=CaseDetailOut)
-def get_case(case_id: int, db: Session = Depends(get_db)):
-    row = db.get(CaseORM, case_id)
+def get_case(
+    case_id: int,
+    db: Session = Depends(get_db),
+    tenant: TenantORM = Depends(get_current_tenant),
+):
+    row = db.query(CaseORM).filter(CaseORM.id == case_id, CaseORM.tenant_id == tenant.id).first()
     if row is None:
         raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
     return row
 
 
 @router.patch("/{case_id}", response_model=CaseDetailOut)
-def update_case(case_id: int, payload: CaseUpdateIn, db: Session = Depends(get_db)):
-    row = db.get(CaseORM, case_id)
+def update_case(
+    case_id: int,
+    payload: CaseUpdateIn,
+    db: Session = Depends(get_db),
+    tenant: TenantORM = Depends(get_current_tenant),
+):
+    row = db.query(CaseORM).filter(CaseORM.id == case_id, CaseORM.tenant_id == tenant.id).first()
     if row is None:
         raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
 

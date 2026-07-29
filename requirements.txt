@@ -7,3 +7,4 @@ sqlalchemy
 psycopg[binary]
 python-multipart
 pytest
+httpx

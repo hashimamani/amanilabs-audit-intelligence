@@ -17,6 +17,7 @@ def save_cases(db: Session, run: AnalysisRunORM, cases: list[Case]) -> list[Case
     for i, case in enumerate(cases, start=1):
         row = CaseORM(
             case_ref=f"CASE-{run.id:04d}-{i:04d}",
+            tenant_id=run.tenant_id,
             run_id=run.id,
             subject_type=case.subject_type,
             subject_id=case.subject_id,

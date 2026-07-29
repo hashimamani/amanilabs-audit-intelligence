@@ -23,10 +23,21 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
+class TenantORM(Base):
+    __tablename__ = "tenants"
+
+    id = Column(Integer, primary_key=True)
+    slug = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, nullable=False)
+    api_key = Column(String, unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+
+
 class AnalysisRunORM(Base):
     __tablename__ = "analysis_runs"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     dataset_id = Column(String, nullable=False)
     dataset_dir = Column(String, nullable=False)
     created_at = Column(DateTime, default=utcnow)
@@ -40,6 +51,7 @@ class CaseORM(Base):
     __tablename__ = "cases"
 
     id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     case_ref = Column(String, unique=True, index=True, nullable=False)
     run_id = Column(Integer, ForeignKey("analysis_runs.id"), nullable=False)
 

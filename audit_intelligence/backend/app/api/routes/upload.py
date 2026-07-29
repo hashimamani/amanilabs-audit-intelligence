@@ -1,15 +1,20 @@
 import uuid
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 
 from app.core.datasets import REQUIRED_FILES, UPLOADS_DIR
+from app.core.tenancy import get_current_tenant
+from app.db.models import TenantORM
 from app.api.schemas import UploadOut
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
 
 @router.post("", response_model=UploadOut)
-async def upload_dataset(files: list[UploadFile] = File(...)):
+async def upload_dataset(
+    files: list[UploadFile] = File(...),
+    tenant: TenantORM = Depends(get_current_tenant),
+):
     received = {f.filename: f for f in files}
     missing = [name for name in REQUIRED_FILES if name not in received]
     if missing:
@@ -20,7 +25,7 @@ async def upload_dataset(files: list[UploadFile] = File(...)):
         )
 
     dataset_id = uuid.uuid4().hex[:12]
-    dataset_dir = UPLOADS_DIR / dataset_id
+    dataset_dir = UPLOADS_DIR / tenant.slug / dataset_id
     dataset_dir.mkdir(parents=True, exist_ok=True)
 
     for name in REQUIRED_FILES:

@@ -3,7 +3,8 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.datasets import resolve_dataset_dir, DatasetNotFoundError, DEFAULT_DATASET_ID
-from app.db.models import AnalysisRunORM
+from app.core.tenancy import get_current_tenant
+from app.db.models import AnalysisRunORM, TenantORM
 from app.rules.dataset import SaccoDataset
 from app.rules.engine import RuleEngine
 from app.cases.builder import build_cases
@@ -14,10 +15,14 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 
 
 @router.post("/run", response_model=RunSummaryOut)
-def run_analysis(payload: RunAnalysisIn, db: Session = Depends(get_db)):
+def run_analysis(
+    payload: RunAnalysisIn,
+    db: Session = Depends(get_db),
+    tenant: TenantORM = Depends(get_current_tenant),
+):
     dataset_id = payload.dataset_id or DEFAULT_DATASET_ID
     try:
-        dataset_dir = resolve_dataset_dir(payload.dataset_id)
+        dataset_dir = resolve_dataset_dir(payload.dataset_id, tenant.slug)
     except DatasetNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -26,6 +31,7 @@ def run_analysis(payload: RunAnalysisIn, db: Session = Depends(get_db)):
     cases = build_cases(flags, dataset=dataset)
 
     run = AnalysisRunORM(
+        tenant_id=tenant.id,
         dataset_id=dataset_id,
         dataset_dir=str(dataset_dir),
         flag_count=len(flags),
@@ -41,5 +47,10 @@ def run_analysis(payload: RunAnalysisIn, db: Session = Depends(get_db)):
 
 
 @router.get("/runs", response_model=list[RunSummaryOut])
-def list_runs(db: Session = Depends(get_db)):
-    return db.query(AnalysisRunORM).order_by(AnalysisRunORM.created_at.desc()).all()
+def list_runs(db: Session = Depends(get_db), tenant: TenantORM = Depends(get_current_tenant)):
+    return (
+        db.query(AnalysisRunORM)
+        .filter(AnalysisRunORM.tenant_id == tenant.id)
+        .order_by(AnalysisRunORM.created_at.desc())
+        .all()
+    )

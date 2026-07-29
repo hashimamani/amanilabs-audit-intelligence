@@ -278,8 +278,9 @@ pattern behavior for real-world realism, never to tune a metric).
   layer are solid — and when built, must ONLY explain evidence the engine
   already produced, never invent facts)
 - RBAC / multi-role auth (single "auditor" role is enough for now)
-- Multi-tenancy (decide this explicitly before writing the DB schema/API —
-  it wasn't decided as of this handoff)
+- Multi-tenancy is decided and built (see section 12) — this bullet is now
+  historical context for why RBAC/login is still explicitly deferred, not
+  a statement that multi-tenancy itself is undecided.
 - Live DB connectors (Postgres/SQL Server/MySQL) — CSV/Excel only for now
 - Natural language search, historical case comparison, board reports
 - Full Clean Architecture / DDD ceremony — repository pattern is worth
@@ -366,8 +367,8 @@ pattern behavior for real-world realism, never to tune a metric).
 
 1. Further UI polish if there's appetite: bulk case status updates,
    evidence export.
-2. Decide multi-tenancy model whenever there's a concrete second-tenant
-   need — still explicitly undecided, not blocking anything right now.
+2. Login/RBAC whenever there's a real need for it beyond one API key per
+   tenant (still explicitly deferred, see section 7/12).
 
 ## 11. Working style established so far (please continue it)
 
@@ -382,3 +383,69 @@ pattern behavior for real-world realism, never to tune a metric).
   built.
 - Copy finished code out to wherever the user can actually see/download it
   as each layer completes, rather than batching it all until the end.
+
+## 12. Multi-tenancy (done)
+
+Decided and built once a real second SACCO was lined up (previously
+deferred per section 7 pending a concrete need).
+
+- **Isolation model**: shared schema, `tenant_id` discriminator column —
+  NOT schema-per-tenant or DB-per-tenant. Works identically on SQLite
+  (local dev) and Postgres (Docker), no per-tenant migration tooling,
+  matches this project's current scale (a handful of SACCOs, not
+  thousands). `TenantORM` (`app/db/models.py`) has `id`/`slug`/`name`/
+  `api_key`; `AnalysisRunORM` and `CaseORM` both carry `tenant_id`
+  directly (not just via a join through `run`) so a route filtering cases
+  can't leak another tenant's rows even if it forgets to also join back to
+  `analysis_runs` — defense in depth.
+- **Tenant identification**: an `X-Tenant-Key` header resolved to a tenant
+  row by `get_current_tenant` (`app/core/tenancy.py`), a FastAPI dependency
+  added to every route in `analysis.py`, `cases.py`, `upload.py`. No
+  login/session/passwords — deliberately smaller than RBAC, which stays
+  deferred (there is still no user-identity concept anywhere in the app,
+  only tenant identity). Missing OR unrecognized keys both return a plain
+  `401` (the header param is `Optional` in the FastAPI signature rather
+  than `required=True` specifically so a missing header doesn't instead
+  surface as FastAPI's default `422` validation error, which would read as
+  "malformed request" rather than "not authenticated").
+- **Default tenant**: `ensure_default_tenant()` auto-seeds a `"default"`
+  tenant at startup (`main.py`) with a stable, non-secret, well-known key
+  (`local-dev-default-key` — mirrors the existing `DEFAULT_DATASET_ID =
+  "default"` pattern) so local dev and the bundled synthetic demo stay
+  zero-friction. This key protects nothing sensitive — it only ever gates
+  access to the bundled demo dataset in a dev environment.
+- **Real tenant provisioning**: `python -m app.scripts.create_tenant
+  --slug <slug> --name "<Display Name>"` (run from `backend/`) generates a
+  random key via `secrets.token_urlsafe(32)` and prints it once — this is
+  how the real second SACCO gets onboarded. Deliberately a CLI, not an
+  admin UI: fine for a handful of pilot tenants by hand, revisit if/when
+  self-service onboarding is actually needed.
+- **Upload isolation**: uploaded datasets are stored under
+  `UPLOADS_DIR / tenant.slug / dataset_id` (was flat `UPLOADS_DIR /
+  dataset_id`) so one tenant can't address another's uploaded dataset even
+  by guessing its id. The bundled `"default"` demo dataset is shared
+  across all tenants unchanged (it isn't tenant-owned data).
+- **Frontend**: `src/api/client.ts` sends `X-Tenant-Key` from
+  `VITE_TENANT_KEY` on every request (see `.env.example`). No
+  tenant-switcher UI — out of scope until there's a login flow; in
+  practice each tenant (including the real second SACCO) gets its own
+  frontend env value/build pointed at the shared backend.
+- **No migration tool introduced**: this project has no Alembic (or
+  equivalent) and `Base.metadata.create_all` is additive-only
+  (create-missing-table, not alter-existing-table). Since there was no
+  real persisted data yet (both local SQLite and dockerized Postgres were
+  dev-only), the schema change was rolled out by deleting the local
+  `audit_intelligence.db` and `docker compose down -v`'ing the Postgres
+  volume once. Revisit with a real migration tool once there's real tenant
+  data that can't just be dropped and recreated.
+- **Verified**: full pytest suite (19/19, including new
+  `tests/test_tenancy.py` covering missing/unknown keys and cross-tenant
+  isolation via FastAPI's `TestClient`); manually against a running
+  backend — two tenants (`default` + a provisioned `demo-sacco`) each ran
+  an analysis on the same bundled dataset, produced fully separate case
+  sets, and cross-tenant case-by-id lookups returned `404`; the dashboard/
+  case-list/case-detail UI flows re-verified working end-to-end in a real
+  browser with the tenant header wired in; the full Docker Compose stack
+  (frontend + backend + Postgres) rebuilt and re-verified against the new
+  schema, including confirming the dockerized frontend's baked-in
+  `VITE_TENANT_KEY` reaches the backend through the proxy.

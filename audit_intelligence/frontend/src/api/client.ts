@@ -7,6 +7,7 @@ import type {
 } from "./types";
 
 const BASE_URL = "/api";
+const TENANT_KEY = import.meta.env.VITE_TENANT_KEY ?? "";
 
 class ApiError extends Error {
   status: number;
@@ -18,8 +19,12 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = { "X-Tenant-Key": TENANT_KEY };
+  if (!(init?.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: init?.body instanceof FormData ? undefined : { "Content-Type": "application/json" },
+    headers,
     ...init,
   });
   if (!res.ok) {
