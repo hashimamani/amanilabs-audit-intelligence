@@ -13,7 +13,7 @@ those are the fields the API actually mutates.
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, Integer, String, Float, DateTime, JSON, ForeignKey, Text
+from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime, JSON, ForeignKey, Text
 from sqlalchemy.orm import relationship
 
 from app.core.db import Base
@@ -29,8 +29,22 @@ class TenantORM(Base):
     id = Column(Integer, primary_key=True)
     slug = Column(String, unique=True, index=True, nullable=False)
     name = Column(String, nullable=False)
-    api_key = Column(String, unique=True, index=True, nullable=False)
     created_at = Column(DateTime, default=utcnow)
+
+
+class UserORM(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    role = Column(String, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=utcnow)
+
+    tenant = relationship("TenantORM")
 
 
 class AnalysisRunORM(Base):

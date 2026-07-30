@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.db import Base, SessionLocal, engine
-from app.core.tenancy import ensure_default_tenant
+from app.core.auth import ensure_default_tenant_and_admin
 
 app = FastAPI(title="Audit Intelligence API", version="0.1.0")
 
@@ -23,7 +23,7 @@ app.add_middleware(
 Base.metadata.create_all(bind=engine)
 
 with SessionLocal() as _startup_db:
-    ensure_default_tenant(_startup_db)
+    ensure_default_tenant_and_admin(_startup_db)
 
 app.include_router(api_router)
 

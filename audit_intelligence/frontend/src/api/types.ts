@@ -85,9 +85,16 @@ export interface RunSummary {
   case_count: number;
 }
 
-export interface TenantInfo {
-  slug: string;
+export type Role = "auditor" | "admin";
+
+export interface UserInfo {
+  id: number;
+  email: string;
   name: string;
+  role: Role;
+  is_active: boolean;
+  tenant_slug: string;
+  tenant_name: string;
 }
 
 export const REQUIRED_UPLOAD_FILES = [

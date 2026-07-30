@@ -1,7 +1,5 @@
-import { useEffect, useState } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
-import { getCurrentTenant } from "../api/client";
-import type { TenantInfo } from "../api/types";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard" },
@@ -11,22 +9,15 @@ const NAV_ITEMS = [
 
 export function Layout() {
   const location = useLocation();
-  const [tenant, setTenant] = useState<TenantInfo | null>(null);
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
 
-  useEffect(() => {
-    let cancelled = false;
-    getCurrentTenant()
-      .then((info) => {
-        if (!cancelled) setTenant(info);
-      })
-      .catch(() => {
-        // Nav bar degrades gracefully to no tenant badge (e.g. an invalid
-        // key never showed one before this either - not worth an error UI).
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  function handleLogout() {
+    logout();
+    navigate("/login", { replace: true });
+  }
+
+  const navItems = user?.role === "admin" ? [...NAV_ITEMS, { to: "/users", label: "Users" }] : NAV_ITEMS;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -35,13 +26,13 @@ export function Layout() {
           <span className="text-lg font-semibold text-slate-900">
             Audit Intelligence
           </span>
-          {tenant && (
+          {user && (
             <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-              {tenant.name}
+              {user.name} &middot; {user.tenant_name}
             </span>
           )}
-          <nav className="flex gap-4">
-            {NAV_ITEMS.map((item) => {
+          <nav className="flex flex-1 items-center gap-4">
+            {navItems.map((item) => {
               const active =
                 item.to === "/"
                   ? location.pathname === "/"
@@ -59,6 +50,12 @@ export function Layout() {
               );
             })}
           </nav>
+          <button
+            onClick={handleLogout}
+            className="text-sm font-medium text-slate-500 hover:text-slate-700"
+          >
+            Log out
+          </button>
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-6 py-8">

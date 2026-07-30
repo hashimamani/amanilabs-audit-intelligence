@@ -2,13 +2,19 @@ import type {
   CaseDetail,
   CaseSummary,
   CaseUpdate,
+  Role,
   RunSummary,
-  TenantInfo,
   UploadResult,
+  UserInfo,
 } from "./types";
 
 const BASE_URL = "/api";
-const TENANT_KEY = import.meta.env.VITE_TENANT_KEY ?? "";
+
+let authToken: string | null = null;
+
+export function setAuthToken(token: string | null): void {
+  authToken = token;
+}
 
 class ApiError extends Error {
   status: number;
@@ -20,7 +26,8 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = { "X-Tenant-Key": TENANT_KEY };
+  const headers: Record<string, string> = {};
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
   if (!(init?.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
@@ -105,8 +112,50 @@ export function bulkUpdateCaseStatus(
   });
 }
 
-export function getCurrentTenant(): Promise<TenantInfo> {
-  return request("/tenant/me");
+export interface LoginResult {
+  access_token: string;
+  user: UserInfo;
+}
+
+export function login(email: string, password: string): Promise<LoginResult> {
+  return request("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function getMe(): Promise<UserInfo> {
+  return request("/auth/me");
+}
+
+export function listUsers(): Promise<UserInfo[]> {
+  return request("/users");
+}
+
+export interface UserCreate {
+  email: string;
+  name: string;
+  password: string;
+  role: Role;
+}
+
+export function createUser(payload: UserCreate): Promise<UserInfo> {
+  return request("/users", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export interface UserUpdate {
+  role?: Role;
+  is_active?: boolean;
+}
+
+export function updateUser(id: number, payload: UserUpdate): Promise<UserInfo> {
+  return request(`/users/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
 }
 
 export { ApiError };

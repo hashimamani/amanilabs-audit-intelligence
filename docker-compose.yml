@@ -21,6 +21,7 @@ services:
       dockerfile: audit_intelligence/backend/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://audit_intelligence:audit_intelligence@postgres:5432/audit_intelligence
+      JWT_SECRET: ${JWT_SECRET:-dev-insecure-secret-change-before-any-real-deploy}
     ports:
       - "8000:8000"
     volumes:
@@ -33,8 +34,6 @@ services:
     build:
       context: .
       dockerfile: audit_intelligence/frontend/Dockerfile
-      args:
-        VITE_TENANT_KEY: ${VITE_TENANT_KEY:-local-dev-default-key}
     ports:
       - "5173:80"
     depends_on:

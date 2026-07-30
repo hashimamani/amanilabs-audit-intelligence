@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.datasets import resolve_dataset_dir, DatasetNotFoundError, DEFAULT_DATASET_ID
-from app.core.tenancy import get_current_tenant
+from app.core.auth import get_current_tenant
 from app.db.models import AnalysisRunORM, TenantORM
 from app.rules.dataset import SaccoDataset
 from app.rules.engine import RuleEngine

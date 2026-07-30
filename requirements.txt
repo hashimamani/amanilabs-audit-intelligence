@@ -8,3 +8,5 @@ psycopg[binary]
 python-multipart
 pytest
 httpx
+bcrypt
+pyjwt

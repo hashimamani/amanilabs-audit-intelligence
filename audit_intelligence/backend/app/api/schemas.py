@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -81,11 +82,36 @@ class BulkCaseStatusOut(BaseModel):
     updated_count: int
 
 
-class TenantOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    slug: str
+class UserOut(BaseModel):
+    id: int
+    email: str
     name: str
+    role: str
+    is_active: bool
+    tenant_slug: str
+    tenant_name: str
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+class LoginOut(BaseModel):
+    access_token: str
+    user: UserOut
+
+
+class UserCreateIn(BaseModel):
+    email: str
+    name: str
+    password: str
+    role: Literal["auditor", "admin"]
+
+
+class UserUpdateIn(BaseModel):
+    role: Literal["auditor", "admin"] | None = None
+    is_active: bool | None = None
 
 
 class UploadOut(BaseModel):

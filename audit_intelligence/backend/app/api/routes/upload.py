@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 
 from app.core.datasets import REQUIRED_FILES, UPLOADS_DIR
-from app.core.tenancy import get_current_tenant
+from app.core.auth import get_current_tenant
 from app.db.models import TenantORM
 from app.api.schemas import UploadOut
 

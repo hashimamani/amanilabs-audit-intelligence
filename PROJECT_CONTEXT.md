@@ -277,10 +277,11 @@ pattern behavior for real-world realism, never to tune a metric).
 - AI summarization layer (explicitly deferred until rule engine + case
   layer are solid — and when built, must ONLY explain evidence the engine
   already produced, never invent facts)
-- RBAC / multi-role auth (single "auditor" role is enough for now)
-- Multi-tenancy is decided and built (see section 12) — this bullet is now
-  historical context for why RBAC/login is still explicitly deferred, not
-  a statement that multi-tenancy itself is undecided.
+- RBAC / multi-role auth is decided and built (see section 15) — Auditor
+  and Admin roles, individual login. Still explicitly NOT built: self-service
+  signup, password reset/forgot-password email flow, a user changing their
+  own password, or token revocation before expiry.
+- Multi-tenancy is decided and built (see section 12).
 - Live DB connectors (Postgres/SQL Server/MySQL) — CSV/Excel only for now
 - Natural language search, historical case comparison, board reports
 - Full Clean Architecture / DDD ceremony — repository pattern is worth
@@ -364,11 +365,13 @@ pattern behavior for real-world realism, never to tune a metric).
 
 ## 10. Immediate next steps (in order)
 
-1. Login/RBAC whenever there's a real need for it beyond one API key per
-   tenant (still explicitly deferred, see section 7/12).
-2. Pick and configure an actual hosting target for the pilot (domain,
+1. Pick and configure an actual hosting target for the pilot (domain,
    HTTPS at the edge, where the VM/host actually lives) now that the
    stack itself is deployable (section 14) — still undecided.
+2. Fast follows explicitly deferred from Login/RBAC (section 15), pick up
+   only if/when actually needed: self-service signup, forgot-password
+   email flow, a user changing their own password, token revocation
+   before expiry.
 
 ## 11. Working style established so far (please continue it)
 
@@ -456,6 +459,17 @@ deferred per section 7 pending a concrete need).
   (frontend + backend + Postgres) rebuilt and re-verified against the new
   schema, including confirming the dockerized frontend's baked-in
   `VITE_TENANT_KEY` reaches the backend through the proxy.
+
+**Superseded by section 15**: the `X-Tenant-Key`/`api_key`/`VITE_TENANT_KEY`
+mechanism described above was fully replaced by individual user login once
+RBAC was built - `TenantORM.api_key` no longer exists, `app/core/tenancy.py`
+and `GET /tenant/me` were deleted, and `VITE_TENANT_KEY` is gone from the
+frontend/Docker config entirely. The isolation model itself (shared schema,
+`tenant_id` columns, defense-in-depth double filtering) is UNCHANGED - only
+the "how do we know which tenant is asking" mechanism moved from a shared
+key to `user.tenant_id` via login. Left the history above intact rather
+than rewriting it, since the reasoning for the isolation model itself is
+still exactly why it works today.
 
 ## 13. Bulk case status updates + CSV evidence export (done)
 
@@ -556,3 +570,99 @@ compose` on any VM, not to picking/configuring a specific host.
   re-verified unaffected (Vite auto-selected :5174 since :5173 was held by
   the Docker container running simultaneously during this check - not a
   regression, just two things sharing a port at once).
+
+**Superseded by section 15**: `VITE_TENANT_KEY` (and the build-`ARG`
+threading described above) no longer exists - auth is per-user login now,
+nothing is baked into the frontend build. `docker-compose.yml`'s backend
+service instead gets a `JWT_SECRET` env var (same "insecure dev default,
+override before real deploy" pattern). The nginx SPA-fallback and `/api/`
+reverse-proxy design described here is unchanged and still exactly how
+the frontend reaches the backend in Docker.
+
+## 15. Login + RBAC: Auditor / Admin roles (done)
+
+Every request previously authenticated via one shared `X-Tenant-Key` per
+tenant - no individual identity, no permission differences. Explicitly
+asked for by the user once the multi-tenancy and pilot-demo-actions work
+was done. Replaces that shared-key model entirely, not layered on top of
+it: logging in as a user determines both identity AND tenant (a user
+belongs to exactly one tenant).
+
+- **Roles**: `auditor` (everything the app already did - view/update
+  cases, add notes, run analyses) and `admin` (everything an auditor can
+  do, plus manage user accounts for their own tenant via `/users`).
+- **`UserORM`** (`app/db/models.py`): `tenant_id`, `email` (unique),
+  `password_hash`, `name`, `role`, `is_active`. `TenantORM.api_key` was
+  removed - fully dead once login replaced it. Same no-Alembic,
+  drop-and-recreate rollout this project has now used three times
+  (multi-tenancy's `tenant_id` columns, this session, this change) -
+  local `audit_intelligence.db` / the Postgres volume needed dropping
+  once for the new schema.
+- **Passwords**: `bcrypt` via `app/core/security.py` (`hash_password`/
+  `verify_password`). **Tokens**: stateless JWT (`pyjwt`, HS256, 24h
+  expiry, no refresh token - re-login on expiry is an accepted
+  pilot-stage tradeoff) via the same module. The JWT payload carries only
+  `{sub: user_id, exp}` - deliberately NOT role/tenant - so
+  `get_current_user` (`app/core/auth.py`) does a fresh DB lookup every
+  request. This matters because an admin can deactivate a user; baking
+  role/tenant into the token would let a deactivated user's existing
+  token keep working until it expired. `JWT_SECRET` is read from env,
+  defaulting to a labeled insecure dev value - same pattern as
+  `DATABASE_URL`/the CORS comment in `main.py`. Logout is client-side
+  only (discard the token) - no server-side session to revoke.
+- **`app/core/auth.py`** replaced `app/core/tenancy.py`: `get_current_user`
+  (parses `Authorization: Bearer <token>`, 401 on anything wrong -
+  missing, malformed, expired, or an inactive user, without
+  distinguishing which, same non-leaking reasoning the old tenancy
+  dependency used for its own header), `get_current_tenant` (thin wrapper
+  - `user.tenant`) so every existing route in `analysis.py`/`cases.py`/
+  `upload.py` needed only its import line changed, not its body, and
+  `require_admin` (403 if `role != "admin"`). `ensure_default_tenant_and_admin`
+  auto-seeds the `"default"` tenant AND a well-known dev admin
+  (`admin@default.local` / `local-dev-admin`, non-secret, mirrors the old
+  `DEFAULT_TENANT_DEV_KEY` reasoning exactly) at startup so local dev /
+  `docker compose up` stay zero-friction.
+- **Routes**: `POST /auth/login`, `GET /auth/me` (`app/api/routes/auth.py`);
+  admin-only `GET/POST /users`, `PATCH /users/{id}` (`app/api/routes/users.py`,
+  every route scoped to `tenant_id == admin.tenant_id`, 404 - not 403 - on
+  a foreign user id, matching the case-lookup pattern). `GET /tenant/me`
+  was deleted - `GET /auth/me` returns richer info (who's logged in, not
+  just which tenant) and made it redundant.
+- **`create_tenant.py`** now provisions a tenant's first admin, not a key:
+  `--slug --name --admin-email --admin-name`, prints a generated password
+  once. Every subsequent user for that tenant is created by that admin
+  through `/users` in the app itself, not this script.
+- **Frontend**: new `src/auth/AuthContext.tsx` (plain React context, no
+  new state library - matches this app's existing plain-`useState` style)
+  holds the token (in `localStorage` - accepted XSS tradeoff, same class
+  as CORS being wide open pre-pilot, noted not solved) and user, hydrating
+  via `GET /auth/me` on load. `client.ts` sends `Authorization: Bearer` from
+  it instead of `X-Tenant-Key`. `App.tsx` gained a `RequireAuth` wrapper
+  (redirects to `/login`, preserving the attempted path) and a `/login`
+  route outside `Layout`. `Layout.tsx`'s badge now shows `{user.name} ·
+  {tenant.name}` plus a working "Log out" action, and a "Users" nav link
+  that only renders for `role === "admin"`. New `UsersPage.tsx` (admin-only)
+  lists the tenant's users with inline role-change and activate/deactivate
+  controls, plus a create-user form - this is the concrete thing that
+  makes "Admin" mean something beyond a label.
+- **Not built** (explicitly deferred, flag if wanted): self-service
+  signup, forgot-password/email flow, a user changing their own password,
+  token revocation before expiry.
+- **Verified**: full pytest suite (29/29) including new `tests/test_auth.py`
+  (login success/failure, `/auth/me` token validation, a deactivated
+  user's existing token stops working immediately, admin-only routes
+  reject an auditor with 403, user CRUD stays scoped to the admin's own
+  tenant); `test_tenancy.py` renamed to `test_tenant_isolation.py` and
+  `test_cases_bulk.py` rewritten to authenticate via login instead of the
+  old header, same assertions. Manually: `curl` login with correct/wrong
+  credentials, `/auth/me` with/without a token, provisioned a second
+  tenant's admin and re-confirmed cross-tenant case isolation still holds
+  under the new auth layer. Real browser: logged in as the seeded default
+  admin, saw the nav badge and "Users" link, ran an analysis, opened/
+  updated a case; created an auditor account via `UsersPage`; logged out
+  (redirected to `/login`); logged in as that new auditor and confirmed
+  no "Users" link and a clean "Admin role required" message (not a raw
+  error dump) when hitting `/users` directly via the preserved
+  post-login redirect. Full Docker Compose stack rebuilt and re-verified
+  (login through nginx's `/api` proxy, default admin auto-seeded in a
+  fresh Postgres volume). `npm run build` re-verified passing.

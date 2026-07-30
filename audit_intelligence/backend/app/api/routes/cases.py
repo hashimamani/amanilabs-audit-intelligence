@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.core.tenancy import get_current_tenant
+from app.core.auth import get_current_tenant
 from app.db.models import CaseORM, AnalysisRunORM, TenantORM
 from app.api.schemas import (
     CaseSummaryOut,
