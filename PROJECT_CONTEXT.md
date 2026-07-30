@@ -781,3 +781,49 @@ asks how it works under the hood.
   render their evidence tables correctly (guarantee chain, fellow ring
   members, loans involved, approval window / shared field+value), with
   the phone-number fix confirmed showing `0770548145` not `770548145`.
+
+## 17. "Quietly premium" UI styling pass (done)
+
+Requested directly: better styling, a more premium feel. Locked in:
+refined neutral palette + one signature accent color (not a bold/
+colorful redesign - reads less "serious" for an audit/compliance
+product), small icons okay (`lucide-react`).
+
+- **Typography**: `@fontsource-variable/inter` (self-hosted, bundled at
+  build time - no external CDN request at runtime, matches this
+  project's existing self-containment habits), set as `--font-sans` in
+  `index.css`'s `@theme` block so Tailwind v4's Preflight picks it up
+  everywhere automatically.
+- **Accent color**: Tailwind's built-in `indigo` palette, used
+  consistently for primary buttons, active nav state, focus rings,
+  checkboxes, links-on-hover. Slate stays the neutral base everywhere
+  else. `SeverityBadge.tsx`'s red/orange/amber/slate mapping is
+  untouched - that color carries real meaning for auditors and
+  shouldn't be overridden by the brand accent.
+- **Reusable classes** via Tailwind's `@layer components` in
+  `index.css` (`.card`, `.btn-primary`, `.btn-secondary`,
+  `.input-field`) replace the repeated `rounded-lg border
+  border-slate-200 bg-white p-6` etc. strings that were copy-pasted
+  across every page. Deliberately CSS-only, not a new React
+  `Button`/`Card` component layer - this codebase has never used shared
+  component abstractions for these, and introducing one now would be
+  scope creep beyond "better styling."
+- **Icons** (`lucide-react`): a `ShieldCheck` logo mark (`Layout.tsx`
+  header, `LoginPage.tsx`), nav item icons, dashboard stat-tile icons,
+  and icons on buttons that benefit from one (run analysis, upload,
+  export/download, add user, back-to-cases).
+- **`LoginPage.tsx`** (highest-visibility page) got a bit more:
+  subtle `bg-gradient-to-b from-indigo-50 via-slate-50 to-slate-50`
+  instead of flat slate, logo mark above the form.
+- Fixed a real overflow bug found during verification: nav item labels
+  (e.g. "Upload & Analyze") were wrapping mid-phrase once icons were
+  added and took more horizontal space - added `whitespace-nowrap` to
+  nav links and the header's logo/tenant-badge spans.
+- **Verified**: `npm run build` passing (re-exercises the
+  `erasableSyntaxOnly` regression point from section 9); full backend
+  suite 29/29 unaffected (styling-only, no backend changes); real
+  browser walkthrough of every page (Login, Dashboard, Cases list, Case
+  detail, Upload, Users) logged in as the seeded default admin, plus a
+  fresh auditor account to re-confirm the `role === "admin"` nav gating
+  (section 15) still correctly hides "Users" and blocks the route after
+  this pass touched `Layout.tsx`'s surrounding markup.

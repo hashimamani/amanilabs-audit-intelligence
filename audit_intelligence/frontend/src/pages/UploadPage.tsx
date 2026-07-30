@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { CheckCircle2, PlayCircle, UploadCloud } from "lucide-react";
 import { ApiError, runAnalysis, uploadDataset } from "../api/client";
 import { REQUIRED_UPLOAD_FILES } from "../api/types";
 import type { RunSummary, UploadResult } from "../api/types";
@@ -60,7 +61,7 @@ export function UploadPage() {
         </p>
       </div>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
+      <section className="card p-6">
         <h2 className="text-base font-semibold text-slate-900">Try the demo dataset</h2>
         <p className="mt-1 text-sm text-slate-500">
           Runs the engine against a synthetic dataset with known injected fraud
@@ -69,30 +70,33 @@ export function UploadPage() {
         <button
           onClick={() => handleRunAnalysis(undefined)}
           disabled={analyzing}
-          className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          className="btn-primary mt-4 flex items-center gap-2"
         >
+          <PlayCircle className="h-4 w-4" />
           {analyzing ? "Running analysis..." : "Run analysis on demo dataset"}
         </button>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
+      <section className="card p-6">
         <h2 className="text-base font-semibold text-slate-900">Upload your own data</h2>
         <p className="mt-1 text-sm text-slate-500">
           Select all 8 required CSV exports at once (file names must match exactly):
         </p>
         <ul className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-          {REQUIRED_UPLOAD_FILES.map((name) => (
-            <li
-              key={name}
-              className={`rounded px-2 py-1 ${
-                selectedFiles.some((f) => f.name === name)
-                  ? "bg-emerald-50 text-emerald-700"
-                  : "bg-slate-100"
-              }`}
-            >
-              {name}
-            </li>
-          ))}
+          {REQUIRED_UPLOAD_FILES.map((name) => {
+            const selected = selectedFiles.some((f) => f.name === name);
+            return (
+              <li
+                key={name}
+                className={`flex items-center gap-1 rounded px-2 py-1 ${
+                  selected ? "bg-emerald-50 text-emerald-700" : "bg-slate-100"
+                }`}
+              >
+                {selected && <CheckCircle2 className="h-3 w-3" />}
+                {name}
+              </li>
+            );
+          })}
         </ul>
 
         <input
@@ -112,18 +116,19 @@ export function UploadPage() {
         <button
           onClick={handleUpload}
           disabled={uploading || selectedFiles.length === 0 || missingFiles.length > 0}
-          className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          className="btn-primary mt-4 flex items-center gap-2"
         >
+          <UploadCloud className="h-4 w-4" />
           {uploading ? "Uploading..." : "Upload dataset"}
         </button>
 
         {uploadResult && (
-          <div className="mt-4 rounded-md bg-emerald-50 p-3 text-sm text-emerald-800">
+          <div className="mt-4 flex items-center gap-3 rounded-md bg-emerald-50 p-3 text-sm text-emerald-800">
             Uploaded (dataset {uploadResult.dataset_id}).
             <button
               onClick={() => handleRunAnalysis(uploadResult.dataset_id)}
               disabled={analyzing}
-              className="ml-3 rounded-md bg-emerald-700 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+              className="rounded-md bg-emerald-700 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
             >
               {analyzing ? "Running..." : "Run analysis on this dataset"}
             </button>
@@ -136,7 +141,7 @@ export function UploadPage() {
       )}
 
       {runResult && (
-        <section className="rounded-lg border border-slate-200 bg-white p-6">
+        <section className="card p-6">
           <h2 className="text-base font-semibold text-slate-900">Analysis complete</h2>
           <dl className="mt-3 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
             <div>
@@ -152,10 +157,7 @@ export function UploadPage() {
               <dd className="font-medium text-slate-900">{runResult.case_count}</dd>
             </div>
           </dl>
-          <button
-            onClick={() => navigate("/cases")}
-            className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-          >
+          <button onClick={() => navigate("/cases")} className="btn-primary mt-4">
             View cases
           </button>
         </section>

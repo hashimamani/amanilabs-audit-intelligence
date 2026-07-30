@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { AlertTriangle, CircleDot, Flag as FlagIcon, FolderOpen, PlayCircle } from "lucide-react";
 import { ApiError, listCases, listRuns } from "../api/client";
 import type { CaseSummary, RunSummary, Severity } from "../api/types";
 import { SeverityBadge } from "../components/SeverityBadge";
@@ -99,39 +100,49 @@ export function DashboardPage() {
             Latest run: {run.dataset_id} &middot; {formatTimestamp(run.created_at)}
           </p>
         </div>
-        <Link
-          to="/upload"
-          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-        >
+        <Link to="/upload" className="btn-primary flex items-center gap-2">
+          <PlayCircle className="h-4 w-4" />
           Run new analysis
         </Link>
       </div>
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <div className="text-xs font-medium text-slate-500">Flags raised</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{run.flag_count}</div>
-        </div>
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <div className="text-xs font-medium text-slate-500">Cases opened</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">{run.case_count}</div>
-        </div>
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <div className="text-xs font-medium text-slate-500">Critical + High</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">
-            {severityCounts[0].count + severityCounts[1].count}
+        <div className="card flex items-start justify-between p-4">
+          <div>
+            <div className="text-xs font-medium text-slate-500">Flags raised</div>
+            <div className="mt-1 text-2xl font-semibold text-slate-900">{run.flag_count}</div>
           </div>
+          <FlagIcon className="h-5 w-5 text-indigo-500" />
         </div>
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <div className="text-xs font-medium text-slate-500">Still open</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900">
-            {statusCounts[0].count}
+        <div className="card flex items-start justify-between p-4">
+          <div>
+            <div className="text-xs font-medium text-slate-500">Cases opened</div>
+            <div className="mt-1 text-2xl font-semibold text-slate-900">{run.case_count}</div>
           </div>
+          <FolderOpen className="h-5 w-5 text-indigo-500" />
+        </div>
+        <div className="card flex items-start justify-between p-4">
+          <div>
+            <div className="text-xs font-medium text-slate-500">Critical + High</div>
+            <div className="mt-1 text-2xl font-semibold text-slate-900">
+              {severityCounts[0].count + severityCounts[1].count}
+            </div>
+          </div>
+          <AlertTriangle className="h-5 w-5 text-indigo-500" />
+        </div>
+        <div className="card flex items-start justify-between p-4">
+          <div>
+            <div className="text-xs font-medium text-slate-500">Still open</div>
+            <div className="mt-1 text-2xl font-semibold text-slate-900">
+              {statusCounts[0].count}
+            </div>
+          </div>
+          <CircleDot className="h-5 w-5 text-indigo-500" />
         </div>
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <section className="rounded-lg border border-slate-200 bg-white p-6">
+        <section className="card p-6">
           <h2 className="text-base font-semibold text-slate-900">Cases by severity</h2>
           <ul className="mt-4 space-y-3">
             {severityCounts.map(({ severity, count }) => (
@@ -158,7 +169,7 @@ export function DashboardPage() {
           </ul>
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-6">
+        <section className="card p-6">
           <h2 className="text-base font-semibold text-slate-900">Cases by status</h2>
           <ul className="mt-4 space-y-3">
             {statusCounts.map(({ status, count }) => (
@@ -177,7 +188,7 @@ export function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <section className="rounded-lg border border-slate-200 bg-white p-6">
+        <section className="card p-6">
           <h2 className="text-base font-semibold text-slate-900">Most-triggered rules</h2>
           {topRules.length === 0 ? (
             <p className="mt-4 text-sm text-slate-400">No rules triggered.</p>
@@ -193,7 +204,7 @@ export function DashboardPage() {
           )}
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-6">
+        <section className="card p-6">
           <h2 className="text-base font-semibold text-slate-900">Highest-risk cases</h2>
           {topCases.length === 0 ? (
             <p className="mt-4 text-sm text-slate-400">No cases yet.</p>

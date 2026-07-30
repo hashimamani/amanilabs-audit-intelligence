@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { ArrowLeft, Download } from "lucide-react";
 import { ApiError, getCase, updateCase } from "../api/client";
 import type { CaseDetail } from "../api/types";
 import { SeverityBadge } from "../components/SeverityBadge";
@@ -122,8 +123,12 @@ export function CaseDetailPage() {
 
   return (
     <div className="space-y-6">
-      <Link to="/cases" className="text-sm text-slate-500 hover:text-slate-700">
-        &larr; Back to cases
+      <Link
+        to="/cases"
+        className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Back to cases
       </Link>
 
       <div className="flex items-start justify-between">
@@ -136,14 +141,12 @@ export function CaseDetailPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            onClick={handleExportEvidence}
-            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
+          <button onClick={handleExportEvidence} className="btn-secondary flex items-center gap-2">
+            <Download className="h-4 w-4" />
             Download evidence (CSV)
           </button>
           <SeverityBadge severity={caseData.severity} />
-          <span className="text-2xl font-semibold text-slate-900">
+          <span className="text-2xl font-semibold text-indigo-600">
             {caseData.risk_score.toFixed(1)}
           </span>
         </div>
@@ -151,14 +154,14 @@ export function CaseDetailPage() {
 
       {error && <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>}
 
-      <section className="grid grid-cols-1 gap-4 rounded-lg border border-slate-200 bg-white p-6 sm:grid-cols-3">
+      <section className="card grid grid-cols-1 gap-4 p-6 sm:grid-cols-3">
         <div>
           <label className="text-xs font-medium text-slate-500">Status</label>
           <select
             value={caseData.status}
             disabled={saving}
             onChange={(e) => handleStatusChange(e.target.value)}
-            className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            className="input-field mt-1 block w-full"
           >
             {STATUSES.map((s) => (
               <option key={s} value={s}>
@@ -173,7 +176,7 @@ export function CaseDetailPage() {
             value={auditorDraft}
             onChange={(e) => setAuditorDraft(e.target.value)}
             onBlur={handleSaveDetails}
-            className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            className="input-field mt-1 block w-full"
           />
         </div>
         <div>
@@ -182,16 +185,17 @@ export function CaseDetailPage() {
             value={outcomeDraft}
             onChange={(e) => setOutcomeDraft(e.target.value)}
             onBlur={handleSaveDetails}
-            className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            className="input-field mt-1 block w-full"
           />
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
+      <section className="card p-6">
         <h2 className="text-base font-semibold text-slate-900">Timeline</h2>
         <ol className="mt-4 space-y-4">
           {caseData.timeline.map((event, i) => (
-            <li key={i} className="border-l-2 border-slate-200 pl-4">
+            <li key={i} className="relative border-l-2 border-slate-200 pl-4">
+              <span className="absolute top-1 -left-[5px] h-2 w-2 rounded-full bg-indigo-500" />
               <div className="text-xs text-slate-400">{formatTimestamp(event.timestamp)}</div>
               <div className="text-sm font-medium text-slate-900">{event.rule_name}</div>
               <div className="text-sm text-slate-600">{event.explanation}</div>
@@ -200,7 +204,7 @@ export function CaseDetailPage() {
         </ol>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
+      <section className="card p-6">
         <h2 className="text-base font-semibold text-slate-900">Evidence</h2>
         <dl className="mt-4 divide-y divide-slate-100">
           {caseData.evidence.map((e, i) => (
@@ -212,7 +216,7 @@ export function CaseDetailPage() {
         </dl>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
+      <section className="card p-6">
         <h2 className="text-base font-semibold text-slate-900">Recommended actions</h2>
         <ul className="mt-4 list-disc space-y-1 pl-5 text-sm text-slate-700">
           {caseData.recommended_actions.map((action, i) => (
@@ -221,7 +225,7 @@ export function CaseDetailPage() {
         </ul>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
+      <section className="card p-6">
         <h2 className="text-base font-semibold text-slate-900">Notes</h2>
         <ul className="mt-3 space-y-2">
           {caseData.notes.length === 0 && (
@@ -239,19 +243,19 @@ export function CaseDetailPage() {
             onChange={(e) => setNoteDraft(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleAddNote()}
             placeholder="Add a note..."
-            className="flex-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            className="input-field flex-1"
           />
           <button
             onClick={handleAddNote}
             disabled={saving || !noteDraft.trim()}
-            className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            className="btn-primary py-1.5"
           >
             Add
           </button>
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
+      <section className="card p-6">
         <h2 className="text-base font-semibold text-slate-900">
           Constituent flags ({caseData.flags.length})
         </h2>

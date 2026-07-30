@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { Download, PlayCircle } from "lucide-react";
 import { ApiError, bulkUpdateCaseStatus, listCases } from "../api/client";
 import type { CaseSummary, Severity } from "../api/types";
 import { SeverityBadge } from "../components/SeverityBadge";
@@ -118,14 +119,13 @@ export function CaseListPage() {
           <button
             onClick={handleExport}
             disabled={cases.length === 0}
-            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            className="btn-secondary flex items-center gap-2"
           >
+            <Download className="h-4 w-4" />
             Export CSV
           </button>
-          <Link
-            to="/upload"
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
-          >
+          <Link to="/upload" className="btn-primary flex items-center gap-2">
+            <PlayCircle className="h-4 w-4" />
             Run new analysis
           </Link>
         </div>
@@ -135,7 +135,7 @@ export function CaseListPage() {
         <select
           value={severity}
           onChange={(e) => setFilter("severity", e.target.value)}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+          className="input-field"
         >
           <option value="">All severities</option>
           {SEVERITIES.map((s) => (
@@ -147,7 +147,7 @@ export function CaseListPage() {
         <select
           value={status}
           onChange={(e) => setFilter("status", e.target.value)}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+          className="input-field"
         >
           <option value="">All statuses</option>
           {STATUSES.map((s) => (
@@ -159,12 +159,12 @@ export function CaseListPage() {
       </div>
 
       {selected.size > 0 && (
-        <div className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-4 py-2 text-sm">
-          <span className="font-medium text-slate-700">{selected.size} selected</span>
+        <div className="flex items-center gap-3 rounded-md border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm">
+          <span className="font-medium text-indigo-900">{selected.size} selected</span>
           <select
             value={bulkStatus}
             onChange={(e) => setBulkStatus(e.target.value)}
-            className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+            className="input-field py-1"
           >
             {STATUSES.map((s) => (
               <option key={s} value={s}>
@@ -172,16 +172,12 @@ export function CaseListPage() {
               </option>
             ))}
           </select>
-          <button
-            onClick={handleApplyBulkStatus}
-            disabled={applyingBulk}
-            className="rounded-md bg-slate-900 px-3 py-1 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-          >
+          <button onClick={handleApplyBulkStatus} disabled={applyingBulk} className="btn-primary px-3 py-1">
             Apply
           </button>
           <button
             onClick={() => setSelected(new Set())}
-            className="text-slate-500 hover:text-slate-700"
+            className="text-indigo-700 hover:text-indigo-900"
           >
             Clear
           </button>
@@ -201,7 +197,7 @@ export function CaseListPage() {
           to get started.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <div className="card overflow-hidden">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50">
               <tr>
@@ -211,6 +207,7 @@ export function CaseListPage() {
                     checked={selected.size === cases.length && cases.length > 0}
                     onChange={toggleSelectAll}
                     aria-label="Select all cases"
+                    className="accent-indigo-600"
                   />
                 </th>
                 <th className="px-4 py-2 text-left font-medium text-slate-500">Case</th>
@@ -231,10 +228,14 @@ export function CaseListPage() {
                       checked={selected.has(c.id)}
                       onChange={() => toggleSelected(c.id)}
                       aria-label={`Select ${c.case_ref}`}
+                      className="accent-indigo-600"
                     />
                   </td>
                   <td className="px-4 py-3">
-                    <Link to={`/cases/${c.id}`} className="font-medium text-slate-900 hover:underline">
+                    <Link
+                      to={`/cases/${c.id}`}
+                      className="font-medium text-slate-900 hover:text-indigo-600 hover:underline"
+                    >
                       {c.case_ref}
                     </Link>
                   </td>

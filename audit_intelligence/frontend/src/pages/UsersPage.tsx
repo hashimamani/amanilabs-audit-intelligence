@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ShieldCheck, UserPlus } from "lucide-react";
 import { ApiError, createUser, listUsers, updateUser } from "../api/client";
 import type { Role, UserInfo } from "../api/types";
 
@@ -72,7 +73,7 @@ export function UsersPage() {
 
       {error && <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>}
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
+      <section className="card p-6">
         <h2 className="text-base font-semibold text-slate-900">Add a user</h2>
         <form onSubmit={handleCreate} className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-5 sm:items-end">
           <div>
@@ -81,7 +82,7 @@ export function UsersPage() {
               required
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+              className="input-field mt-1 block w-full"
             />
           </div>
           <div>
@@ -91,7 +92,7 @@ export function UsersPage() {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+              className="input-field mt-1 block w-full"
             />
           </div>
           <div>
@@ -100,7 +101,7 @@ export function UsersPage() {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+              className="input-field mt-1 block w-full"
             />
           </div>
           <div>
@@ -108,7 +109,7 @@ export function UsersPage() {
             <select
               value={role}
               onChange={(e) => setRole(e.target.value as Role)}
-              className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+              className="input-field mt-1 block w-full"
             >
               {ROLES.map((r) => (
                 <option key={r} value={r}>
@@ -117,11 +118,8 @@ export function UsersPage() {
               ))}
             </select>
           </div>
-          <button
-            type="submit"
-            disabled={creating}
-            className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
-          >
+          <button type="submit" disabled={creating} className="btn-primary flex items-center gap-2 py-1.5">
+            <UserPlus className="h-4 w-4" />
             Add user
           </button>
         </form>
@@ -130,7 +128,7 @@ export function UsersPage() {
       {loading ? (
         <p className="text-sm text-slate-500">Loading...</p>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <div className="card overflow-hidden">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50">
               <tr>
@@ -147,20 +145,34 @@ export function UsersPage() {
                   <td className="px-4 py-3 font-medium text-slate-900">{u.name}</td>
                   <td className="px-4 py-3 text-slate-700">{u.email}</td>
                   <td className="px-4 py-3">
-                    <select
-                      value={u.role}
-                      onChange={(e) => handleRoleChange(u, e.target.value as Role)}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-sm"
-                    >
-                      {ROLES.map((r) => (
-                        <option key={r} value={r}>
-                          {r}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="flex items-center gap-2">
+                      {u.role === "admin" && <ShieldCheck className="h-3.5 w-3.5 text-indigo-600" />}
+                      <select
+                        value={u.role}
+                        onChange={(e) => handleRoleChange(u, e.target.value as Role)}
+                        className={`rounded-md border px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${
+                          u.role === "admin"
+                            ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+                            : "border-slate-300 text-slate-700"
+                        }`}
+                      >
+                        {ROLES.map((r) => (
+                          <option key={r} value={r}>
+                            {r}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </td>
-                  <td className="px-4 py-3 text-slate-500">
-                    {u.is_active ? "Active" : "Deactivated"}
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${
+                        u.is_active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
+                      }`}
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                      {u.is_active ? "Active" : "Deactivated"}
+                    </span>
                   </td>
                   <td className="px-4 py-3">
                     <button
