@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 .pytest_cache/
 audit_intelligence/backend/data/uploads/
+.env

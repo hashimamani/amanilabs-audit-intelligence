@@ -33,11 +33,10 @@ services:
     build:
       context: .
       dockerfile: audit_intelligence/frontend/Dockerfile
-    environment:
-      VITE_API_PROXY_TARGET: http://backend:8000
-      VITE_TENANT_KEY: local-dev-default-key
+      args:
+        VITE_TENANT_KEY: ${VITE_TENANT_KEY:-local-dev-default-key}
     ports:
-      - "5173:5173"
+      - "5173:80"
     depends_on:
       - backend
 

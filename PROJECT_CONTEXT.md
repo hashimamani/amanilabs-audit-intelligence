@@ -289,10 +289,11 @@ pattern behavior for real-world realism, never to tune a metric).
 ## 8. Docker Compose + Postgres (done)
 
 - `docker-compose.yml` at repo root runs three services: `postgres`
-  (postgres:16-alpine), `backend` (FastAPI/uvicorn), `frontend` (Vite dev
-  server, not a production build — see below). `docker compose up -d`
-  brings up the full stack; backend on :8000, frontend on :5173, postgres
-  on :5432.
+  (postgres:16-alpine), `backend` (FastAPI/uvicorn), `frontend` (nginx
+  serving a real production build — see section 14, this was a dev server
+  when Docker Compose first shipped, changed once a real pilot existed).
+  `docker compose up -d` brings up the full stack; backend on :8000,
+  frontend on :5173, postgres on :5432.
 - `app/core/db.py` now reads `DATABASE_URL` from the environment, falling
   back to the existing local SQLite file when unset. docker-compose sets
   it to a `postgresql+psycopg://` URL; local `python -m uvicorn` runs
@@ -302,13 +303,11 @@ pattern behavior for real-world realism, never to tune a metric).
   already avoided any dialect-specific column types (plain JSON columns,
   no SQLite- or Postgres-only types) so no schema changes were needed for
   the swap to work.
-- The frontend Dockerfile runs the same `npm run dev` Vite dev server as
-  local development, not an nginx/production build — deliberate, since
-  there's no deployment target yet (pre-pilot) and a second frontend code
-  path (dev vs. prod build) isn't worth the complexity until one exists.
-  `vite.config.ts`'s proxy target is now read from `VITE_API_PROXY_TARGET`
-  (compose sets it to `http://backend:8000`; local dev is unaffected,
-  defaults to `127.0.0.1:8000`).
+- The frontend Dockerfile originally ran the same `npm run dev` Vite dev
+  server as local development rather than a production build — deliberate
+  at the time, since there was no deployment target yet and a second
+  frontend code path (dev vs. prod build) wasn't worth the complexity
+  until one existed. Superseded once a real pilot existed — see section 14.
 - Verified end-to-end: built both images, brought the stack up, ran a real
   `/analysis/run` through the containerized backend, confirmed the rows
   landed in the Postgres container via `psql` (not just a 200 response),
@@ -365,12 +364,11 @@ pattern behavior for real-world realism, never to tune a metric).
 
 ## 10. Immediate next steps (in order)
 
-1. Production frontend build/deploy path — `docker-compose.yml` still runs
-   `npm run dev` in every environment (see section 8's note on this being
-   a deliberate pre-pilot call); worth revisiting now that a real SACCO
-   pilot exists.
-2. Login/RBAC whenever there's a real need for it beyond one API key per
+1. Login/RBAC whenever there's a real need for it beyond one API key per
    tenant (still explicitly deferred, see section 7/12).
+2. Pick and configure an actual hosting target for the pilot (domain,
+   HTTPS at the edge, where the VM/host actually lives) now that the
+   stack itself is deployable (section 14) — still undecided.
 
 ## 11. Working style established so far (please continue it)
 
@@ -502,3 +500,59 @@ had no way to hand data to someone outside the app.
   correct comma/quote escaping (e.g. `"KSh 62,176"`) in both. `npm run
   build` re-verified passing (this project's known regression point - see
   the earlier `erasableSyntaxOnly` fix in section 9).
+
+## 14. Production frontend build/deploy path (done)
+
+The frontend's Docker Compose service ran Vite's dev server, not a
+production build, even in Docker - a deliberate pre-pilot call (section 8)
+made when there was no deployment target. With a real second SACCO pilot
+now lined up, that needed to change: a dev server was never meant to serve
+real users. No specific hosting provider/domain has been chosen yet, so
+this was scoped to making the stack genuinely deployable via `docker
+compose` on any VM, not to picking/configuring a specific host.
+
+- `audit_intelligence/frontend/Dockerfile` is now a two-stage build:
+  `node:22-slim` runs `npm run build`, then `nginx:1.27-alpine` serves the
+  static `dist/` output. `VITE_TENANT_KEY` is baked into the JS bundle at
+  build time (Vite statically replaces `import.meta.env.VITE_*`), so it's
+  threaded through as a Docker build `ARG`, not a compose `environment:`
+  entry - a runtime env var would be invisible to code that already ran
+  during the image build.
+- New `audit_intelligence/frontend/nginx.conf`: serves static files with
+  `try_files $uri /index.html;` (SPA fallback, so a direct link or hard
+  refresh on a client-side route like `/cases/5` doesn't 404), and
+  reverse-proxies `/api/` to `http://backend:8000/` - the compose service
+  name, stable regardless of external host/domain since it's resolved on
+  the internal compose network. This also means production has no CORS
+  exposure at all: the browser only ever talks to nginx's single origin.
+  Backend CORS config is untouched - still needed for the local
+  non-Docker `npm run dev` flow, where frontend :5173 and backend :8000
+  are genuinely cross-origin.
+- `docker-compose.yml`: frontend service gets `build.args.VITE_TENANT_KEY:
+  ${VITE_TENANT_KEY:-local-dev-default-key}` (defaults to the well-known
+  dev tenant key so `docker compose up` still works zero-friction; a real
+  deployment sets `VITE_TENANT_KEY` via a root `.env`, now gitignored,
+  before building). Port mapping stays `5173:80` - only the container's
+  internal listening port moved from Vite's 5173 to nginx's 80.
+  `VITE_API_PROXY_TARGET` is gone - nginx's `proxy_pass` replaces what the
+  Vite dev-server proxy used to do.
+- `.dockerignore` now excludes `audit_intelligence/frontend/.env`
+  explicitly, so a machine-local dev env file (gitignored but not
+  previously dockerignored) can never leak into a build context, removing
+  any dependence on dotenv's "don't override existing process.env"
+  precedence behavior working correctly.
+- New root `.env.example` documents `VITE_TENANT_KEY` for `docker compose
+  build` specifically - distinct from `audit_intelligence/frontend/
+  .env.example`, which is for the local non-Docker `npm run dev` flow and
+  is untouched by this change.
+- **Verified**: `docker compose up -d --build` - `curl` confirmed nginx
+  serving the root (200), a direct deep link to `/cases/1` returning
+  `index.html` instead of 404 (SPA fallback), and `/api/tenant/me`
+  proxying through to the backend correctly. In a real browser: the
+  dashboard loaded real data end-to-end through nginx -> backend ->
+  Postgres, the nav bar's tenant badge showed "Default / Demo" (proving
+  the build-time-baked key reached the bundle), and navigating directly to
+  a case detail URL worked without a 404. Local (non-Docker) `npm run dev`
+  re-verified unaffected (Vite auto-selected :5174 since :5173 was held by
+  the Docker container running simultaneously during this check - not a
+  regression, just two things sharing a port at once).

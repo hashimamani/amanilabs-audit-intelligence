@@ -6,5 +6,6 @@ __pycache__/
 audit_intelligence/backend/data/uploads/
 audit_intelligence/frontend/node_modules/
 audit_intelligence/frontend/dist/
+audit_intelligence/frontend/.env
 .git/
 .DS_Store
