@@ -197,6 +197,18 @@ including member IDs assigned to fraud scenarios).
    `min_fraction_withdrawn` (default 90%) of the disbursed amount is
    withdrawn within `max_hours_between` (default 24) hours.
 
+9. **R009 Fraud Ring / Collusion Network** — graph/network analysis, not
+   a trained model (see section 16 for the full reasoning and why that
+   distinction matters for how this gets described to a SACCO). Two
+   independent signals, each emitting one Flag per implicated member:
+   (a) circular guarantee chains via directed-graph cycle detection
+   (`networkx.simple_cycles`, length between `min_cycle_length`/
+   `max_cycle_length`, default 3-6) - a closed loop where nobody has
+   independent backing; severity bumps to Critical if the loop's loan
+   approvals fall within `synchronized_window_days` (default 14) of each
+   other; (b) shared `phone`/`national_id` across distinct member records
+   (Critical/High respectively) - a plain groupby, no graph needed.
+
 ## 6. Validation history — what was actually tested and fixed
 
 A validation harness (`validate_against_ground_truth.py`) runs the engine
@@ -227,10 +239,11 @@ they aren't reintroduced:
    second transaction to diff against. Fixed by adding a branch that
    compares against `join_date` when a member has exactly one transaction.
 
-**Current validated state: 47/49 (96%) of injected fraud scenario
-instances detected.** The 2 remaining misses (both R001/Large Withdrawal)
-are members with only 3 total withdrawals — considered correct
-"insufficient history" behavior, not a defect.
+**Current validated state: 52/54 (96%) of injected fraud scenario
+instances detected** (was 47/49 before R009 added 5 new instances, all 5
+caught — see section 16). The 2 remaining misses (both R001/Large
+Withdrawal) are members with only 3 total withdrawals — considered
+correct "insufficient history" behavior, not a defect.
 
 Noise: ~75 flagged entity IDs out of ~226 total don't trace to any
 injected scenario per the original harness's definition. **This was
@@ -666,3 +679,105 @@ belongs to exactly one tenant).
   post-login redirect. Full Docker Compose stack rebuilt and re-verified
   (login through nginx's `/api` proxy, default admin auto-seeded in a
   fresh Postgres volume). `npm run build` re-verified passing.
+
+## 16. Fraud ring detection: R009 (done)
+
+The user asked to pilot one more capability: ML-based fraud ring
+detection. Clarified and locked in up front: **graph/network analysis**,
+not a supervised classifier (no labeled real fraud-ring examples exist to
+train on - inventing synthetic labels risks teaching a model the
+generator's own quirks rather than real fraud signals) and not
+behavioral/transaction clustering (doesn't use the relationship data -
+guarantors, shared contact info - that's the actual signal for a
+*coordinated group*, as opposed to one anomalous member).
+
+**Framing honesty, worth knowing before pitching this to a SACCO
+board**: this is graph theory / network analysis (cycle detection over a
+guarantor digraph, plus shared-identity grouping), not a trained
+statistical model. That's a legitimate, industry-standard part of the
+fraud-detection ML toolkit, and it's a better fit for this product's
+"every flag needs concrete evidence, never invented" principle than a
+model outputting an opaque probability score - but "network analysis" or
+"graph-based detection" is the more precise term than "ML" if someone
+asks how it works under the hood.
+
+- **Why cycle detection, not community detection**: baseline
+  (non-injected) loans already assign 2 random guarantors per loan from
+  the entire member pool - confirmed by reading `generate_data.py`,
+  roughly 1,336 random guarantor edges across ~1,500 members. A naive
+  "cluster members connected via any guarantor edge" (connected
+  components / community detection) would almost certainly collapse into
+  one giant blob from pure noise. A genuine circular guarantee chain (A
+  guarantees B, B guarantees C, C guarantees A) is structurally rare in a
+  mostly-random directed graph, and is also the most literal definition
+  of a "ring" - a closed loop where nobody has independent financial
+  backing, which is what makes a guarantor requirement meaningless.
+  `networkx.simple_cycles(graph, length_bound=...)` bounds the search
+  (unbounded cycle enumeration can blow up on a graph with incidental
+  noise-cycles).
+- **`app/rules/fraud_ring.py` (R009)**, config in `app/rules/config.py`
+  (`min_cycle_length`/`max_cycle_length` default 3/6,
+  `synchronized_window_days` default 14). Two independent signals:
+  - **Circular guarantee chains**: directed graph (guarantor -> borrower)
+    from `guarantors` joined to `loans`; cycles >= `min_cycle_length`
+    are flagged. Severity Critical if the cycle's loan approvals fall
+    within `synchronized_window_days` of each other (rapid + circular is
+    very hard to explain innocently), else High.
+  - **Shared identity**: members grouped by `phone` and separately by
+    `national_id`; any group of 2+ is flagged. `national_id` duplication
+    is Critical (should be unique by construction), shared `phone` is
+    High.
+  - **Both signals emit one `Flag` per implicated member**, not one flag
+    per ring - the key design choice that needed **zero changes** to
+    `Flag`/`Case` (`app/domain/models.py`) or `build_cases`
+    (`app/cases/builder.py`): each flag has a normal single `member_id`,
+    so existing subject-grouping just works, and each ring member gets
+    their own case exactly like every other rule. The ring's other
+    members appear as structured evidence ("Fellow ring members: ...")
+    on each individual's flag.
+  - `triggered_at`: circular-guarantee flags use the cycle's most recent
+    loan-approval timestamp; shared-identity flags use the member's
+    `join_date` - same fallback `app/rules/dormant_account.py` already
+    established for "no better timestamp exists."
+- **Real bug found and fixed while building this**: `SaccoDataset`
+  (`app/rules/dataset.py`) read `members.csv` without an explicit dtype;
+  since `phone`/`national_id` are all-digit strings, pandas inferred
+  `int64` and silently dropped the leading zero every Kenyan phone number
+  starts with (`0770548145` -> `770548145`). Invisible until R009 became
+  the first rule to actually surface these fields in evidence. Fixed with
+  `dtype={"phone": str, "national_id": str}` on the `read_csv` call.
+- **New injected scenario 9** in `generate_data.py`, appended strictly
+  after scenario 8 (every earlier scenario's `random.*` draws had to stay
+  undisturbed, per the file's own documented warning) - verified via
+  `git diff` that all 8 earlier scenarios' `ground_truth.json` entries
+  are byte-identical and no unrelated CSV changed:
+  - **9a circular_guarantee_ring**: 2 rings (sizes 4 and 5), built via
+    `create_loan(..., guarantor_ids=[prev_member])` chained back to the
+    start, approvals clustered within days (with a weekend-dodge so this
+    doesn't also masquerade as an R007 off-hours flag).
+  - **9b shared_identity_ring**: mutates `members_df` directly via
+    `.loc` (it's already been snapshotted from the `members` list by
+    this point in the script, so editing the list wouldn't reach the CSV
+    output) - 2 shared-phone pairs, 1 shared-national-id pair.
+  - `record_ids` logs **every** ring member's id, not one anchor -
+    matches how R009 actually emits a flag per member and how the
+    validation harness checks recall.
+- **Validated, not assumed**: ran the rule against the dataset *before*
+  adding scenario 9 - zero flags (confirms near-zero organic cycle/
+  identity noise going in). After adding scenario 9: all 5 new instances
+  caught (2/2 rings, 3/3 identity pairs), R009 fired exactly 15 times -
+  matching the injected count precisely, with **zero additional organic
+  noise** (the overall "flags not traceable to any injected scenario"
+  count stayed at 75, identical to the pre-R009 baseline in section 6).
+  Detection rate overall: 52/54 (same 2 known R001 misses as before, see
+  section 6). `tests/test_rule_engine.py` updated with the real measured
+  numbers (52/54 baseline, `R009` minimum 10 in
+  `test_flag_counts_by_rule_are_in_expected_range` - actual is 15,
+  loose lower bound like every other rule's floor). Full suite 29/29.
+- **Frontend/API: zero changes needed**, confirmed by re-reading
+  `CaseDetailPage.tsx`/`client.ts` - flags, evidence, and
+  `triggered_rules` all render generically already. Verified in a real
+  browser: a circular-guarantee case and a shared-identity case both
+  render their evidence tables correctly (guarantee chain, fellow ring
+  members, loans involved, approval window / shared field+value), with
+  the phone-number fix confirmed showing `0770548145` not `770548145`.

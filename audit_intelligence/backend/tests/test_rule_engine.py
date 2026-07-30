@@ -35,12 +35,12 @@ def test_engine_runs_without_error(flags):
 def test_detection_rate_meets_validated_baseline(flags, ground_truth):
     flagged = _flagged_ids(flags)
     caught = sum(1 for s in ground_truth if _scenario_ids(s) & flagged)
-    # Validated baseline is 47/49 (96%); the 2 known misses are
+    # Validated baseline is 52/54 (96%); the 2 known misses are
     # large_withdrawal cases with only 3 total withdrawals - not enough
     # history for a meaningful baseline, considered correct behavior, not
     # a bug (see PROJECT_CONTEXT.md section 5). This guards against
     # regressing below that, not against ever missing exactly those two.
-    assert caught >= 47, f"Detection rate dropped: {caught}/{len(ground_truth)} caught (expected >= 47)"
+    assert caught >= 52, f"Detection rate dropped: {caught}/{len(ground_truth)} caught (expected >= 52)"
 
 
 def test_all_non_large_withdrawal_scenarios_are_always_caught(flags, ground_truth):
@@ -72,7 +72,7 @@ def test_flag_counts_by_rule_are_in_expected_range(flags):
     # the engine's output to one exact number forever.
     expected_minimums = {
         "R001": 10, "R002": 8, "R003": 8, "R004": 8,
-        "R005": 1, "R006": 1, "R007": 10, "R008": 8,
+        "R005": 1, "R006": 1, "R007": 10, "R008": 8, "R009": 10,
     }
     for rule_id, minimum in expected_minimums.items():
         assert by_rule.get(rule_id, 0) >= minimum, (

@@ -19,6 +19,7 @@ from app.rules.employee_behaviour import EmployeeLoanApprovalAnomalyRule
 from app.rules.repeated_guarantor import RepeatedGuarantorRule
 from app.rules.offhours_approval import OffHoursApprovalRule
 from app.rules.disbursement_withdrawal import DisbursementWithdrawalRule
+from app.rules.fraud_ring import FraudRingRule
 
 RULE_REGISTRY = [
     LargeWithdrawalRule,
@@ -29,6 +30,7 @@ RULE_REGISTRY = [
     RepeatedGuarantorRule,
     OffHoursApprovalRule,
     DisbursementWithdrawalRule,
+    FraudRingRule,
 ]
 
 SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}

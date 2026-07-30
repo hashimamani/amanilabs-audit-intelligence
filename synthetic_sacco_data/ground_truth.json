@@ -481,5 +481,59 @@
       "L00667/T0054682",
       "L00668/T0054683"
     ]
+  },
+  {
+    "scenario": "circular_guarantee_ring",
+    "description": "4-member circular guarantee chain (M01498 -> M00964 -> M00351 -> M00991 -> M01498), loans approved within days of each other",
+    "record_ids": [
+      "L00669",
+      "L00670",
+      "L00671",
+      "L00672",
+      "M01498",
+      "M00964",
+      "M00351",
+      "M00991"
+    ]
+  },
+  {
+    "scenario": "circular_guarantee_ring",
+    "description": "5-member circular guarantee chain (M00234 -> M00945 -> M00710 -> M00315 -> M00311 -> M00234), loans approved within days of each other",
+    "record_ids": [
+      "L00673",
+      "L00674",
+      "L00675",
+      "L00676",
+      "L00677",
+      "M00234",
+      "M00945",
+      "M00710",
+      "M00315",
+      "M00311"
+    ]
+  },
+  {
+    "scenario": "shared_identity_ring",
+    "description": "Members M00569 and M01062 share phone number 0745672884",
+    "record_ids": [
+      "M00569",
+      "M01062"
+    ]
+  },
+  {
+    "scenario": "shared_identity_ring",
+    "description": "Members M00707 and M00079 share phone number 0770548145",
+    "record_ids": [
+      "M00707",
+      "M00079"
+    ]
+  },
+  {
+    "scenario": "shared_identity_ring",
+    "description": "Members M00215 and M00936 share national ID 20790736",
+    "record_ids": [
+      "M00215",
+      "M00936"
+    ]
   }
 ]

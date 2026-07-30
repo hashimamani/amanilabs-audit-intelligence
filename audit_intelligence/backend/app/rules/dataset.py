@@ -14,7 +14,11 @@ from pathlib import Path
 class SaccoDataset:
     def __init__(self, data_dir: str):
         p = Path(data_dir)
-        self.members = pd.read_csv(p / "members.csv")
+        # phone/national_id are all-digit strings (Kenyan phone numbers
+        # start with a leading 0) - without an explicit dtype, pandas
+        # infers int64 and silently drops the leading zero, which R009's
+        # shared-identity evidence would otherwise display incorrectly.
+        self.members = pd.read_csv(p / "members.csv", dtype={"phone": str, "national_id": str})
         self.branches = pd.read_csv(p / "branches.csv")
         self.employees = pd.read_csv(p / "employees.csv")
         self.accounts = pd.read_csv(p / "accounts.csv")

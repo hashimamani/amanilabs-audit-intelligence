@@ -425,6 +425,61 @@ log_scenario("same_day_disbursement_withdrawal",
              f"{len(injected)} loans withdrawn in full within hours of disbursement",
              [f"{x['loan_id']}/{x['transaction_id']}" for x in injected])
 
+# 9. FRAUD RING (R009 - see app/rules/fraud_ring.py for the detection
+# side). Two independent sub-scenarios: a closed-loop guarantee chain
+# (9a) and shared contact info across "different" member records (9b).
+already_used = {x for s in ground_truth for x in s["record_ids"]}
+ring_pool = [mid for mid in all_member_ids if mid not in already_used]
+
+# 9a. CIRCULAR GUARANTEE RING: each member guarantees the next member's
+# loan, looping back to the first - a closed loop where nobody in the
+# chain has independent financial backing. Approvals clustered within a
+# few days (with a small forward-shift to dodge weekends, so this doesn't
+# also masquerade as an R007 off-hours flag) so the "synchronized window"
+# signal fires too.
+for ring_size in (4, 5):
+    ring_members = random.sample(ring_pool, ring_size)
+    ring_pool = [mid for mid in ring_pool if mid not in ring_members]
+    officer = random.choice(loan_officers)
+    base_dt = random_date(TODAY - timedelta(days=200), TODAY - timedelta(days=30))
+    ring_loan_ids = []
+    for i, mid in enumerate(ring_members):
+        guarantor = ring_members[i - 1]  # previous member in the ring guarantees this one
+        approval_dt = base_dt + timedelta(days=random.randint(0, 4))
+        while approval_dt.weekday() >= 5:
+            approval_dt += timedelta(days=1)
+        lid = create_loan(mid, officer, approval_dt,
+                           amount=round(random.uniform(50000, 200000), -2),
+                           guarantor_ids=[guarantor])
+        ring_loan_ids.append(lid)
+    log_scenario("circular_guarantee_ring",
+                 f"{ring_size}-member circular guarantee chain "
+                 f"({' -> '.join(ring_members)} -> {ring_members[0]}), "
+                 f"loans approved within days of each other",
+                 ring_loan_ids + ring_members)
+
+# 9b. SHARED IDENTITY: "different" member records that actually share a
+# phone number or national ID - either duplicate registrations for the
+# same person, or coordinated accounts. Mutates members_df directly
+# (already snapshotted from `members` by this point in the script) since
+# that's what actually gets written to members.csv.
+shared_id_targets = random.sample(ring_pool, 6)
+ring_pool = [mid for mid in ring_pool if mid not in shared_id_targets]
+
+for pair in (shared_id_targets[0:2], shared_id_targets[2:4]):
+    shared_phone = random_phone()
+    members_df.loc[members_df.member_id.isin(pair), "phone"] = shared_phone
+    log_scenario("shared_identity_ring",
+                 f"Members {pair[0]} and {pair[1]} share phone number {shared_phone}",
+                 list(pair))
+
+national_id_pair = shared_id_targets[4:6]
+shared_nid = random_national_id()
+members_df.loc[members_df.member_id.isin(national_id_pair), "national_id"] = shared_nid
+log_scenario("shared_identity_ring",
+             f"Members {national_id_pair[0]} and {national_id_pair[1]} share national ID {shared_nid}",
+             list(national_id_pair))
+
 # ---------------------------------------------------------------------------
 # Mark risk_rating for injected members (light touch, still "Normal" by default
 # in the clean export - this field simulates what a SACCO's own system might

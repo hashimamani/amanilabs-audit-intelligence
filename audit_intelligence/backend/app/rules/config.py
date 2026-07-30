@@ -13,4 +13,5 @@ DEFAULT_CONFIG = {
     "R006": {"max_loans_guaranteed": 5},
     "R007": {"business_start_hour": 8, "business_end_hour": 17},
     "R008": {"max_hours_between": 24, "min_fraction_withdrawn": 0.9},
+    "R009": {"min_cycle_length": 3, "max_cycle_length": 6, "synchronized_window_days": 14},
 }

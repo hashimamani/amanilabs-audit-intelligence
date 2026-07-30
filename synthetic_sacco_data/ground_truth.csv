@@ -48,3 +48,8 @@ employee_loan_approval_anomaly,Officer EMP0036 approved 25 extra loans (well abo
 repeated_guarantor,Member M00065 guarantees 18 unrelated loans,19,L00626;L00627;L00628;L00629;L00630;L00631;L00632;L00633;L00634;L00635;L00636;L00637;L00638;L00639;L00640;L00641;L00642;L00643;M00065
 weekend_offhours_approval,15 loans approved on weekends or outside business hours,15,L00644;L00645;L00646;L00647;L00648;L00649;L00650;L00651;L00652;L00653;L00654;L00655;L00656;L00657;L00658
 same_day_disbursement_withdrawal,10 loans withdrawn in full within hours of disbursement,10,L00659/T0054674;L00660/T0054675;L00661/T0054676;L00662/T0054677;L00663/T0054678;L00664/T0054679;L00665/T0054680;L00666/T0054681;L00667/T0054682;L00668/T0054683
+circular_guarantee_ring,"4-member circular guarantee chain (M01498 -> M00964 -> M00351 -> M00991 -> M01498), loans approved within days of each other",8,L00669;L00670;L00671;L00672;M01498;M00964;M00351;M00991
+circular_guarantee_ring,"5-member circular guarantee chain (M00234 -> M00945 -> M00710 -> M00315 -> M00311 -> M00234), loans approved within days of each other",10,L00673;L00674;L00675;L00676;L00677;M00234;M00945;M00710;M00315;M00311
+shared_identity_ring,Members M00569 and M01062 share phone number 0745672884,2,M00569;M01062
+shared_identity_ring,Members M00707 and M00079 share phone number 0770548145,2,M00707;M00079
+shared_identity_ring,Members M00215 and M00936 share national ID 20790736,2,M00215;M00936
