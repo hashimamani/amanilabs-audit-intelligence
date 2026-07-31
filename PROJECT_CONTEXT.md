@@ -393,6 +393,23 @@ pattern behavior for real-world realism, never to tune a metric).
    email flow, a user changing their own password, token revocation
    before expiry.
 
+**Low priority / deliberately deferred, not forgotten**: the AWS
+deployment (section 18) was created by hand via one-off CLI commands -
+no infra-as-code, no CI/CD. Discussed and explicitly decided to leave
+manual for now (SSH in, `git pull`/rsync, `docker compose up -d
+--build`) rather than investing in tooling before there's a real need.
+If/when deploys become frequent enough that manual redeploy is real
+toil, or a second environment/account is actually needed: **Terraform**
+(not CDK - smaller footprint for this handful of resources, no
+build-toolchain requirement, and its plan/apply/destroy model directly
+answers "replicate in another account") to codify the existing EC2/
+security-group/Elastic-IP/IAM-user setup via `terraform import` (adopt
+what's already running, don't recreate it), plus a simple GitHub Actions
+workflow (push to `main` -> SSH in -> `git pull` + `docker compose up -d
+--build,` no ECR pipeline/blue-green/staging-env) for code deploys. That
+also means switching the server from its current `rsync` copy to a real
+`git clone` (read-only deploy key) so it can `git pull` cleanly.
+
 ## 11. Working style established so far (please continue it)
 
 - Build in small validated layers: implement -> test against something
