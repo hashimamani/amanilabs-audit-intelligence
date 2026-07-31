@@ -378,10 +378,17 @@ pattern behavior for real-world realism, never to tune a metric).
 
 ## 10. Immediate next steps (in order)
 
-1. Pick and configure an actual hosting target for the pilot (domain,
-   HTTPS at the edge, where the VM/host actually lives) now that the
-   stack itself is deployable (section 14) — still undecided.
-2. Fast follows explicitly deferred from Login/RBAC (section 15), pick up
+1. Register/point a real domain at the pilot's Elastic IP and add HTTPS
+   (ACM if fronted by a load balancer, or Let's Encrypt/Caddy directly on
+   the instance) — deliberately not done in section 18 since there was no
+   domain to attach it to yet.
+2. Provision the real pilot SACCO's tenant on the live server (`ssh` in,
+   `cd audit-intelligence`, `sudo docker compose exec backend python -m
+   app.scripts.create_tenant --slug <slug> --name "<SACCO name>"
+   --admin-email <email> --admin-name "<name>"`) — deliberately skipped
+   during initial deploy since the real SACCO's details weren't decided
+   yet at deploy time.
+3. Fast follows explicitly deferred from Login/RBAC (section 15), pick up
    only if/when actually needed: self-service signup, forgot-password
    email flow, a user changing their own password, token revocation
    before expiry.
@@ -827,3 +834,97 @@ product), small icons okay (`lucide-react`).
   fresh auditor account to re-confirm the `role === "admin"` nav gating
   (section 15) still correctly hides "Users" and blocks the route after
   this pass touched `Layout.tsx`'s surrounding markup.
+
+## 18. Hosted on AWS: single EC2 instance + Docker Compose (done)
+
+Requested directly: host the pilot on AWS. Locked in: a scoped IAM user
+(not root), no domain yet (plain HTTP on the instance's public IP), one
+EC2 instance running the existing `docker-compose.yml` as-is rather than
+ECS/Fargate/RDS — matches this project's consistently chosen "smallest
+correct thing" pattern at this stage (1-2 pilot tenants, pre-revenue).
+
+- **IAM**: root credentials were configured in the deploy environment's
+  AWS CLI — created a dedicated IAM user (`audit-intelligence-deploy`,
+  `AmazonEC2FullAccess`, region `us-east-1`) under a separate named CLI
+  profile (`audit-intelligence`) instead. Root is not used for anything
+  from here on. `AmazonEC2FullAccess` (not a hand-crafted minimal policy)
+  is a deliberate scoping call — already a large reduction from root for
+  a one-off solo-founder deploy; revisit with a tighter custom policy if
+  this ever becomes a team/CI credential instead.
+- **Network**: default VPC/subnet (no custom VPC needed at this scale).
+  Security group `audit-intelligence-sg`: `22/tcp` restricted to the
+  deploying machine's IP only (not `0.0.0.0/0` — avoids random SSH
+  brute-force traffic; note this needs a one-line
+  `authorize-security-group-ingress` update if that IP ever changes),
+  `80/tcp` open to everyone (the actual pilot access point). Postgres
+  (5432) and the backend's direct port (8000) are deliberately NOT
+  opened in the security group even though `docker-compose.yml` still
+  publishes both to the host for local-dev convenience — the security
+  group is the real firewall (AWS SGs gate all inbound traffic at the
+  network interface regardless of what's listening), so leaving those
+  two closed means they're unreachable from the internet without
+  touching the compose file (which would affect local dev too).
+- **Instance**: Ubuntu 24.04 LTS (looked up via `ec2:DescribeImages`
+  against Canonical's owner id, not a hand-picked AMI id that goes
+  stale — the deploy user's `AmazonEC2FullAccess` doesn't include SSM
+  parameter reads, which would've been the other way to resolve the
+  latest AMI). `t3.small` (2 vCPU, 2GB RAM) + a 2GB swap file created via
+  the launch user-data script specifically so `docker compose build`
+  (the `vite build` step) doesn't OOM on a small instance — cheaper than
+  `t3.medium` just for a one-time build spike. 20GB gp3 EBS (default 8GB
+  is tight once OS + Docker images + Postgres data are on it). An
+  Elastic IP is allocated and associated — required given the
+  no-domain/use-the-IP-directly decision, otherwise the public IP would
+  change on every stop/start and silently break the pilot's access URL.
+- **Deploy mechanism**: `rsync` the repo to the instance (same
+  excludes as `.gitignore`/`.dockerignore` already establish - `.git`,
+  `node_modules`, `__pycache__`, `.venv`, `*.db`, upload data), a
+  server-only root `.env` with a freshly generated `openssl rand -hex
+  32` `JWT_SECRET` (never committed, never leaves the server - this is
+  the one credential that actually needed rotating for a real deploy,
+  since unlike the Postgres password it signs tokens that travel to real
+  browsers over the wire), then the exact same `sudo docker compose up
+  -d --build` already validated locally and in section 14.
+- **Port mapping fix found during verification**: `docker-compose.yml`'s
+  frontend service publishes to host port `5173` (matching the local-dev
+  URL convention), not `80` - the security group was scoped to `80`
+  matching the plan's "plain `http://<ip>/`" intent, so the first
+  connectivity check failed. Fixed with a **server-only**
+  `docker-compose.override.yml` (not committed, not synced back to the
+  repo) adding `80:80` for the frontend service - `docker compose`
+  auto-merges override files in the same directory, so `sudo docker
+  compose up -d` on the server picks it up with no other change. Local
+  dev and the repo's `docker-compose.yml` are untouched.
+- **Critical post-deploy hardening**: `ensure_default_tenant_and_admin`
+  (`app/core/auth.py`) seeds `admin@default.local` with a well-known dev
+  password (`local-dev-admin`) by design for local-dev zero-friction
+  (section 15) - that credential is now documented in this very file, so
+  leaving it live on a real internet-facing box would mean anyone who's
+  read this document could log in as an admin. Rotated it immediately
+  after first boot to a freshly generated random password (via a one-off
+  `docker compose exec backend python3 -c "..."` reusing the existing
+  `hash_password`/`SessionLocal` code directly - no new code needed).
+  Did NOT deactivate/delete that account - the bundled demo dataset flow
+  through it is still useful for showing the product to prospects - only
+  rotated what unlocks it. **The real pilot SACCO's own tenant was
+  deliberately NOT provisioned during this deploy** (its name/admin
+  details weren't decided yet) - see section 10 item 2 for the exact
+  command to run on the server whenever it's ready.
+- **Verified**: `curl` from outside the instance confirmed nginx serving
+  the root (200), login working end-to-end through the real deployed
+  stack (old `local-dev-admin` credential correctly rejected with 401
+  after rotation, new credential accepted), a full analysis run against
+  the live backend (101 flags / 91 cases, matching local numbers), case
+  listing, and the SPA fallback on a direct `/cases/1` deep link all
+  working against the public IP. `sudo docker compose ps` confirmed all
+  three containers healthy/running. A full interactive browser
+  walkthrough was intended but the browser tool had a transient outage
+  during this session - the curl-level checks above cover the same
+  request paths the UI would exercise (login, analysis run, case list,
+  client-side routing), so this is a real gap only in "saw it rendered
+  with my own eyes," not in "the deployed stack actually works."
+- **Cost**: ~$17-20/month (t3.small ~$15, 20GB gp3 EBS ~$1.60, Elastic
+  IP free while attached to a running instance).
+- **Access**: `http://34.233.59.94/` (plain HTTP, no domain/TLS yet -
+  see section 10 item 1). SSH: `ssh -i ~/.ssh/audit-intelligence-key.pem
+  ubuntu@34.233.59.94`.
