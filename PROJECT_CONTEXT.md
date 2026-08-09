@@ -1086,6 +1086,14 @@ worth knowing before it hits real production traffic.
   DELETE against production wasn't worth the risk for a harmless,
   fully-isolated extra tenant row) - safe to ignore or remove later.
 
+**Superseded by section 21**: the enum-based `generate_chart` tool
+described above (`GROUP_BY_VALUES`, `filter_rule_id`, and everything
+built on top of them, including section 20's `chart_type`/`CHART_TYPE`
+dict) was fully replaced by a code-execution-based design once real
+usage showed the enum kept needing a hand-added parameter for every new
+question shape. Case Q&A is UNCHANGED and still exactly as described
+above - only analytics moved to the new mechanism.
+
 ## 20. AI board report generator + multi-chart-type analytics (done)
 
 Direct follow-up to section 19: the user wanted to explore genuinely
@@ -1163,6 +1171,13 @@ bar chart to real bar/line chart variety.
     internal tool used by a handful of staff; code-splitting is a fast-
     follow if it ever becomes a real problem, not done here since it
     wasn't asked for and the current size isn't causing any actual issue.
+  - **Superseded by section 21**: the `chart_type`-via-fixed-dict
+    mechanism and the hardcoded `created_date`-spans-all-runs branch
+    described in the two bullets above are gone, replaced by a
+    code-execution design where the model's own generated code decides
+    both. `BarChart.tsx`/`LineChart.tsx` and the `recharts` dependency
+    are UNCHANGED and still exactly as described - only how `chart_type`
+    gets decided moved.
 - **Verified**: full pytest suite (50/50, including new
   `tests/test_reports_ai.py` and the extended `test_analytics_ai.py` -
   all still mock the Anthropic client, zero real network calls or API
@@ -1202,3 +1217,90 @@ date — R002 only", and a count of 10 - matching R002's real, documented
 count in this dataset (section 4's `dormant_account_raid` scenario).
 A follow-up unfiltered question ("cases by severity") was re-checked
 immediately after to confirm the fix didn't regress the unfiltered path.
+
+## 21. Analytics rebuilt on real code execution, replacing the enum tool (done)
+
+The `filter_rule_id` patch in section 19 fixed one specific complaint but
+revealed the real problem: the enum-based `generate_chart` tool needed a
+hand-added parameter for every new question shape a user might ask, and
+would keep needing one forever. The user's direct feedback: "I don't see
+any intelligence with the way it is" - they expected something closer to
+uploading data to Claude and asking it to analyze it, the way Claude.ai's
+own data-analysis mode works, not picking from a fixed menu.
+
+**The constraint that motivated the enum in the first place was never
+"Claude shouldn't be flexible" - it was "Claude must never state a number
+it hasn't verifiably computed."** That constraint is fully preserved by a
+different mechanism: give Claude a code-execution sandbox with the real
+case data, and require its own printed code output - not its prose - to
+be the chart. A number produced by pandas code that actually ran against
+real rows isn't invented, it's computed, exactly as rigorously as the old
+enum's `Counter`-based aggregation was, just without a fixed vocabulary.
+
+- **`app/api/routes/analytics.py`** rewritten from scratch. Claude gets
+  the tenant's case data as an embedded CSV (no Files API - at this
+  project's scale the whole thing is a few KB, well within context) via
+  the `code_execution_20260120` server-side tool, with `thinking:
+  {"type": "adaptive"}` on (this task is genuinely harder than enum
+  selection) and `max_tokens=8192` (same headroom lesson learned from
+  the report generator's truncation bug in section 20). The system
+  prompt requires Claude's code to print exactly one JSON object as its
+  final output (`{title, chart_type, data}`); the backend extracts and
+  validates that JSON's *structure* (never trust model-decided shape
+  blindly, even though the *values* inside it are now trustworthy by
+  construction) before returning it. Handles the documented `pause_turn`
+  resubmission case (server-side tool iteration cap) with one retry.
+- **Privacy-minimized by design**: the CSV sent to the sandbox has only
+  `run_id`, `severity`, `status`, `subject_type`, `triggered_rules`,
+  `risk_score`, `created_at` - no `case_ref`, `subject_id`, or
+  `subject_name`. Charts are about aggregates, never about identifying a
+  specific member; case Q&A and the report generator already own "tell
+  me about this specific case" and stay unchanged. This also closes off
+  the prompt-injection surface almost entirely - every column sent is
+  either a backend-generated enum value or a number, never user-authored
+  free text (unlike case Q&A's evidence values, which is a pre-existing,
+  separate consideration).
+- **What used to be hardcoded Python branching is now a prompt
+  instruction Claude's own code implements**: "for a snapshot question,
+  use only the most recent run_id; for a trend/history question, use all
+  runs." This generalizes to questions the old hardcoded branch (which
+  only handled `created_date` specially) never anticipated - confirmed
+  live: asking for a plain average correctly used only the latest run
+  (a snapshot question) with no code change needed to teach it that.
+- **`app/api/schemas.py`**: `ChartDatapointOut.value` is now `float` (not
+  `int`) - metrics aren't just `case_count` anymore, since Claude's code
+  can compute anything (averages confirmed working live). `AnalyticsQueryOut`
+  drops `group_by`/`metric`, which no longer mean anything.
+- **Tests shift focus**, and this is worth understanding explicitly: the
+  old tests asserted specific aggregation outputs, which was meaningful
+  when this codebase's own `Counter` did the counting. Now the
+  aggregation lives in Claude-generated code, which can't be usefully
+  unit-tested without a real call - exactly mirroring how case Q&A/report
+  quality were never unit-tested either, only grounding/structure was.
+  `tests/test_analytics_ai.py` was rewritten to verify what's still under
+  this codebase's control: the CSV actually handed to the model (spans
+  all runs, excludes PII - `test_analytics_csv_excludes_pii_and_spans_all_runs`),
+  response structure validation on four different malformed-output shapes,
+  the empty-tenant short-circuit not calling Claude, and the `pause_turn`
+  resubmission path. Full suite 48/48.
+- **Verified live** against the deployed pilot with real Claude calls,
+  including two questions the old enum system could never have answered
+  at all, both independently cross-checked against a manual calculation
+  from `GET /cases`:
+  - "What is the average risk score for R001 cases?" → returned 90.59.
+    Manually confirmed: 22 R001 cases in the latest run, mean risk score
+    90.59 - exact match, including the (correct, unprompted-in-code)
+    decision to scope to the latest run only since this is a snapshot
+    question, not a trend.
+  - "Break down R009 cases by severity" → returned Critical: 11, High: 4.
+    Manually confirmed via `Counter` over the same data - exact match.
+  - `npm run build` clean; both live tests took roughly 30-45 seconds
+    each (thinking + code execution round-trip) - noticeably slower than
+    the old single forced tool call, an expected and accepted tradeoff
+    for the flexibility gained.
+- **New cost/latency profile, not yet acted on**: code execution
+  container time is billed past a monthly free-hours allowance (~$0.05/hr
+  after 1,550 free hours/org/month) - negligible at this project's usage
+  scale but a new cost dimension beyond message tokens. Still no
+  per-tenant rate limiting or cost guard on any AI endpoint (same
+  standing gap noted since section 19).
