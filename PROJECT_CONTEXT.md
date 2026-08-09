@@ -1304,3 +1304,47 @@ enum's `Counter`-based aggregation was, just without a fixed vocabulary.
   scale but a new cost dimension beyond message tokens. Still no
   per-tenant rate limiting or cost guard on any AI endpoint (same
   standing gap noted since section 19).
+
+**Latency follow-up, same day**: the ~30-45s round trip drew a real user
+complaint ("i dont get it") - it read as broken, not slow. Two rounds of
+tuning, both measured live rather than assumed:
+
+1. First attempt: dropped adaptive thinking and set `effort: "medium"`
+   on Opus, hypothesizing "thinking" was the dominant cost. Measured
+   live post-deploy: 46.9s and 41.2s - essentially no change from
+   before. Hypothesis was wrong; reported that honestly rather than
+   claiming a fix that didn't hold up. Also fixed the frontend's loading
+   state either way, since a silent 40-second wait reads as broken
+   regardless of the actual latency number ("Analyzing..." + a caption
+   explaining what's happening, replacing the old bare "Asking...").
+2. Second attempt: switched analytics specifically to `claude-sonnet-5`
+   (case Q&A and the report generator stay on Opus - only this route is
+   synchronously latency-sensitive with a live user waiting).
+   `call_claude()` (`app/core/ai.py`) now takes an optional `model=`
+   override instead of a hardcoded constant, defaulting to the app-wide
+   Opus model. **Real trap avoided**: Sonnet 5 defaults to *adaptive
+   thinking* when `thinking` is omitted - the opposite of Opus 4.8,
+   which defaults to none - so simply switching models without also
+   explicitly setting `thinking: {"type": "disabled"}` would have
+   silently reintroduced the exact overhead attempt 1 was trying to
+   remove. Covered by a new test asserting both the model and the
+   explicit `thinking: disabled` on every analytics call.
+   - **Measured live, three samples**: 32.9s, 37.3s, 31.0s (avg ~34s) vs.
+     the Opus baseline's 46.9s/41.2s (avg ~44s) - a real, consistent
+     ~25% improvement, not a dramatic one. Confirms the dominant cost is
+     the sandboxed code-execution container itself (spin-up + real
+     Python execution), which is largely fixed regardless of model or
+     prompt tuning - full suite 49/49, `npm run build` clean.
+   - One of the three live runs also demonstrated the flexibility this
+     redesign was built for: asked "trend of R002 cases" against a
+     tenant with only one analysis run on record, and it correctly
+     returned an honest empty chart titled "R002 Trend Not Available -
+     Only Single Analysis Run Present," instead of faking a one-point
+     line - reasoning the old enum-based system had no way to do.
+- **Where this leaves latency**: ~30-40s is now the realistic floor for
+  this feature at current settings, and further speed needs either
+  accepting that floor and improving the *waiting experience* (e.g.
+  streaming visible progress instead of a static spinner - discussed,
+  not built) or a more invasive architecture change (e.g. skipping code
+  execution for simple, recognizable questions). Neither pursued yet -
+  flagging as the next real lever if 30-40s still isn't acceptable.
