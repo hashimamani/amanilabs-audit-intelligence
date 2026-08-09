@@ -4,6 +4,7 @@ import type {
   CaseDetail,
   CaseSummary,
   CaseUpdate,
+  ReportResult,
   Role,
   RunSummary,
   UploadResult,
@@ -125,6 +126,13 @@ export function queryAnalytics(question: string): Promise<AnalyticsQueryResult> 
   return request("/analytics/query", {
     method: "POST",
     body: JSON.stringify({ question }),
+  });
+}
+
+export function generateReport(caseIds?: number[]): Promise<ReportResult> {
+  return request("/reports/generate", {
+    method: "POST",
+    body: JSON.stringify({ case_ids: caseIds ?? null }),
   });
 }
 

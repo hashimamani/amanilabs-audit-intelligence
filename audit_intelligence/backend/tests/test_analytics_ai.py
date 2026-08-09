@@ -85,6 +85,7 @@ def test_analytics_severity_groupby_matches_real_counts(client, default_token, s
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["group_by"] == "severity"
+    assert body["chart_type"] == "bar"
 
     expected = Counter(c["severity"] for c in seeded_cases)
     actual = {d["label"]: d["value"] for d in body["data"]}
@@ -98,6 +99,7 @@ def test_analytics_rule_id_groupby_counts_once_per_rule(client, default_token, s
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
+    assert body["chart_type"] == "bar"
 
     expected: Counter = Counter()
     for c in seeded_cases:
@@ -114,6 +116,42 @@ def test_analytics_rule_id_groupby_counts_once_per_rule(client, default_token, s
 def test_analytics_rejects_out_of_enum_group_by(client, default_token, mocked_ai_tool):
     resp = client.post("/analytics/query", json={"question": "..."}, headers=_headers(default_token))
     assert resp.status_code == 400
+
+
+@pytest.mark.parametrize("mocked_ai_tool", [("created_date", "case_count")], indirect=True)
+def test_analytics_created_date_is_a_line_chart(client, default_token, mocked_ai_tool):
+    resp = client.post(
+        "/analytics/query", json={"question": "cases over time"}, headers=_headers(default_token)
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["chart_type"] == "line"
+
+
+def test_analytics_created_date_spans_multiple_runs(client, default_token):
+    # Trigger a second run so there's more than one run to prove this spans.
+    client.post("/analysis/run", json={}, headers=_headers(default_token))
+
+    all_runs = client.get("/analysis/runs", headers=_headers(default_token)).json()
+    assert len(all_runs) >= 2, "need at least 2 runs to prove this isn't just the latest run"
+
+    expected_total = 0
+    for run in all_runs:
+        cases = client.get(f"/cases?run_id={run['id']}&limit=200", headers=_headers(default_token)).json()
+        expected_total += len(cases)
+
+    fake = _fake_tool_use_client("created_date", "case_count")
+    app.dependency_overrides[get_anthropic_client] = lambda: fake
+    try:
+        resp = client.post(
+            "/analytics/query", json={"question": "cases over time"}, headers=_headers(default_token)
+        )
+    finally:
+        app.dependency_overrides.pop(get_anthropic_client, None)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    actual_total = sum(d["value"] for d in body["data"])
+    assert actual_total == expected_total
 
 
 def test_analytics_503_when_key_unset(client, default_token, monkeypatch):

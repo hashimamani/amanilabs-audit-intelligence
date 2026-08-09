@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.auth import get_current_tenant
-from app.core.ai import call_claude, get_anthropic_client
+from app.core.ai import call_claude, case_to_grounding_text, get_anthropic_client
 from app.db.models import CaseORM, AnalysisRunORM, TenantORM
 from app.api.schemas import (
     CaseSummaryOut,
@@ -31,40 +31,6 @@ Rules — follow these exactly:
 CASE RECORD:
 {grounding_context}
 """
-
-
-def _case_to_grounding_text(row: CaseORM) -> str:
-    lines = [
-        f"Case: {row.case_ref}",
-        f"Subject: {row.subject_type} {row.subject_name} ({row.subject_id})",
-        f"Severity: {row.severity}  Risk score: {row.risk_score}  Status: {row.status}",
-        f"Triggered rules: {', '.join(row.triggered_rules) or 'none'}",
-        "",
-        "Evidence:",
-    ]
-    for e in row.evidence:
-        lines.append(f"- {e['label']}: {e['value']}")
-
-    lines += ["", "Flags:"]
-    for f in row.flags:
-        lines.append(f"- [{f['rule_id']}] {f['rule_name']} ({f['severity']}): {f['explanation']}")
-        for e in f.get("evidence", []):
-            lines.append(f"    evidence: {e['label']}: {e['value']}")
-        if f.get("suggested_steps"):
-            lines.append(f"    suggested steps: {'; '.join(f['suggested_steps'])}")
-
-    lines += ["", "Timeline:"]
-    for t in row.timeline:
-        lines.append(f"- {t.get('timestamp', 'undated')}: {t.get('rule_name', '')} — {t.get('explanation', '')}")
-
-    lines += ["", "Related entities:"]
-    for k, v in row.related_entities.items():
-        lines.append(f"- {k}: {', '.join(v)}")
-
-    lines.append("")
-    lines.append(f"Recommended actions: {'; '.join(row.recommended_actions) or 'none'}")
-    lines.append(f"Auditor notes: {'; '.join(row.notes) or 'none'}")
-    return "\n".join(lines)
 
 
 def _latest_run_id(db: Session, tenant_id: int) -> int | None:
@@ -192,7 +158,7 @@ def ask_case_question(
     if row is None:
         raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
 
-    system_prompt = CASE_QA_SYSTEM_PROMPT.format(grounding_context=_case_to_grounding_text(row))
+    system_prompt = CASE_QA_SYSTEM_PROMPT.format(grounding_context=case_to_grounding_text(row))
     response = call_claude(
         client,
         max_tokens=1024,

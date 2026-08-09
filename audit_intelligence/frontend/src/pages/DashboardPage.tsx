@@ -12,6 +12,7 @@ import {
 import { ApiError, listCases, listRuns, queryAnalytics } from "../api/client";
 import type { AnalyticsQueryResult, CaseSummary, RunSummary, Severity } from "../api/types";
 import { BarChart } from "../components/BarChart";
+import { LineChart } from "../components/LineChart";
 import { SeverityBadge } from "../components/SeverityBadge";
 
 const SEVERITIES: Severity[] = ["Critical", "High", "Medium", "Low"];
@@ -286,7 +287,11 @@ export function DashboardPage() {
           <div className="mt-4">
             <h3 className="text-sm font-medium text-slate-900">{chartResult.title}</h3>
             <div className="mt-3">
-              <BarChart data={chartResult.data} />
+              {chartResult.chart_type === "line" ? (
+                <LineChart data={chartResult.data} />
+              ) : (
+                <BarChart data={chartResult.data} />
+              )}
             </div>
           </div>
         )}

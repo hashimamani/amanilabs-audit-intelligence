@@ -35,6 +35,18 @@ TITLES = {
     "created_date": "Cases by creation date",
 }
 
+# Chart type is derived from the dimension, never chosen by Claude - keeps
+# the "model only picks WHICH real thing, never decides presentation" rule
+# intact. created_date is inherently a time series; everything else is a
+# categorical snapshot.
+CHART_TYPE = {
+    "severity": "bar",
+    "status": "bar",
+    "subject_type": "bar",
+    "rule_id": "bar",
+    "created_date": "line",
+}
+
 ANALYTICS_SYSTEM_PROMPT = (
     "You help an auditor explore fraud-case statistics. You never compute or "
     "state any number yourself. Your only job is to call generate_chart, "
@@ -113,14 +125,22 @@ def analytics_query(
     if group_by not in GROUP_BY_VALUES or metric not in METRIC_VALUES:
         raise HTTPException(status_code=400, detail="Unsupported chart request from AI")
 
-    run_id = _latest_run_id(db, tenant.id)
-    rows = (
-        db.query(CaseORM)
-        .filter(CaseORM.tenant_id == tenant.id, CaseORM.run_id == run_id)
-        .all()
-        if run_id is not None
-        else []
-    )
+    # created_date is a time series - it should span the tenant's whole case
+    # history, not just the latest run. A single analysis run creates all its
+    # cases in one batch, so scoping it to "latest run only" (like every
+    # other dimension, which IS the correct scope for a snapshot breakdown)
+    # would show one spike on one day instead of a trend.
+    if group_by == "created_date":
+        rows = db.query(CaseORM).filter(CaseORM.tenant_id == tenant.id).all()
+    else:
+        run_id = _latest_run_id(db, tenant.id)
+        rows = (
+            db.query(CaseORM)
+            .filter(CaseORM.tenant_id == tenant.id, CaseORM.run_id == run_id)
+            .all()
+            if run_id is not None
+            else []
+        )
 
     counts: Counter = Counter()
     if group_by == "rule_id":
@@ -135,4 +155,10 @@ def analytics_query(
             counts[getattr(row, group_by)] += 1
 
     data = [ChartDatapointOut(label=label, value=value) for label, value in sorted(counts.items())]
-    return AnalyticsQueryOut(title=TITLES[group_by], group_by=group_by, metric=metric, data=data)
+    return AnalyticsQueryOut(
+        title=TITLES[group_by],
+        group_by=group_by,
+        metric=metric,
+        chart_type=CHART_TYPE[group_by],
+        data=data,
+    )

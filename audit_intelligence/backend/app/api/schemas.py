@@ -103,7 +103,18 @@ class AnalyticsQueryOut(BaseModel):
     title: str
     group_by: str
     metric: str
+    chart_type: str
     data: list[ChartDatapointOut]
+
+
+class ReportGenerateIn(BaseModel):
+    case_ids: list[int] | None = None
+
+
+class ReportGenerateOut(BaseModel):
+    report_text: str
+    case_count: int
+    generated_at: datetime
 
 
 class UserOut(BaseModel):

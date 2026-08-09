@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Download, PlayCircle } from "lucide-react";
-import { ApiError, bulkUpdateCaseStatus, listCases } from "../api/client";
-import type { CaseSummary, Severity } from "../api/types";
+import { Download, FileText, PlayCircle, X } from "lucide-react";
+import { ApiError, bulkUpdateCaseStatus, generateReport, listCases } from "../api/client";
+import type { CaseSummary, ReportResult, Severity } from "../api/types";
 import { SeverityBadge } from "../components/SeverityBadge";
-import { downloadCsv } from "../lib/csv";
+import { downloadCsv, downloadText } from "../lib/csv";
 
 const SEVERITIES: Severity[] = ["Critical", "High", "Medium", "Low"];
 const STATUSES = ["Open", "In Progress", "Closed"];
@@ -19,6 +19,9 @@ export function CaseListPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkStatus, setBulkStatus] = useState<string>(STATUSES[0]);
   const [applyingBulk, setApplyingBulk] = useState(false);
+  const [report, setReport] = useState<ReportResult | null>(null);
+  const [generatingReport, setGeneratingReport] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   function setFilter(key: "severity" | "status", value: string) {
     const next = new URLSearchParams(searchParams);
@@ -78,6 +81,25 @@ export function CaseListPage() {
     }
   }
 
+  async function handleGenerateReport() {
+    setGeneratingReport(true);
+    setReportError(null);
+    try {
+      const caseIds = selected.size > 0 ? Array.from(selected) : undefined;
+      const result = await generateReport(caseIds);
+      setReport(result);
+    } catch (e) {
+      setReportError(e instanceof ApiError ? e.message : "Failed to generate report.");
+    } finally {
+      setGeneratingReport(false);
+    }
+  }
+
+  function handleDownloadReport() {
+    if (!report) return;
+    downloadText(`fraud-audit-report-${new Date().toISOString().slice(0, 10)}.txt`, report.report_text);
+  }
+
   function handleExport() {
     const header = [
       "Case",
@@ -123,6 +145,18 @@ export function CaseListPage() {
           >
             <Download className="h-4 w-4" />
             Export CSV
+          </button>
+          <button
+            onClick={handleGenerateReport}
+            disabled={generatingReport || cases.length === 0}
+            className="btn-secondary flex items-center gap-2"
+          >
+            <FileText className="h-4 w-4" />
+            {generatingReport
+              ? "Generating..."
+              : selected.size > 0
+                ? `Generate report (${selected.size} selected)`
+                : "Generate report (top Critical+High)"}
           </button>
           <Link to="/upload" className="btn-primary flex items-center gap-2">
             <PlayCircle className="h-4 w-4" />
@@ -185,6 +219,7 @@ export function CaseListPage() {
       )}
 
       {error && <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>}
+      {reportError && <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{reportError}</div>}
 
       {loading ? (
         <p className="text-sm text-slate-500">Loading...</p>
@@ -255,6 +290,32 @@ export function CaseListPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {report && (
+        <section className="card p-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-slate-900">
+              Fraud audit report ({report.case_count} case{report.case_count === 1 ? "" : "s"})
+            </h2>
+            <div className="flex items-center gap-3">
+              <button onClick={handleDownloadReport} className="btn-secondary flex items-center gap-2">
+                <Download className="h-4 w-4" />
+                Download as text
+              </button>
+              <button
+                onClick={() => setReport(null)}
+                aria-label="Close report"
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <div className="mt-4 max-h-[32rem] overflow-y-auto whitespace-pre-wrap rounded-md bg-slate-50 p-4 text-sm text-slate-700">
+            {report.report_text}
+          </div>
+        </section>
       )}
     </div>
   );
