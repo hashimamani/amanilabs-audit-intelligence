@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Download } from "lucide-react";
-import { ApiError, getCase, updateCase } from "../api/client";
+import { ArrowLeft, Download, MessageCircle, Send } from "lucide-react";
+import { ApiError, askCaseQuestion, getCase, updateCase } from "../api/client";
 import type { CaseDetail } from "../api/types";
 import { SeverityBadge } from "../components/SeverityBadge";
 import { downloadCsv } from "../lib/csv";
@@ -24,6 +24,10 @@ export function CaseDetailPage() {
   const [noteDraft, setNoteDraft] = useState("");
   const [auditorDraft, setAuditorDraft] = useState("");
   const [outcomeDraft, setOutcomeDraft] = useState("");
+  const [qaHistory, setQaHistory] = useState<{ question: string; answer: string }[]>([]);
+  const [questionDraft, setQuestionDraft] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
 
   function load() {
     setLoading(true);
@@ -77,6 +81,21 @@ export function CaseDetailPage() {
       setError(e instanceof ApiError ? e.message : "Failed to add note.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleAsk() {
+    if (!questionDraft.trim()) return;
+    setAsking(true);
+    setAskError(null);
+    try {
+      const result = await askCaseQuestion(caseId, questionDraft.trim());
+      setQaHistory((h) => [...h, { question: questionDraft.trim(), answer: result.answer }]);
+      setQuestionDraft("");
+    } catch (e) {
+      setAskError(e instanceof ApiError ? e.message : "Failed to get an answer.");
+    } finally {
+      setAsking(false);
     }
   }
 
@@ -279,6 +298,52 @@ export function CaseDetailPage() {
               </dl>
             </div>
           ))}
+        </div>
+      </section>
+
+      <section className="card p-6">
+        <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+          <MessageCircle className="h-4 w-4 text-indigo-600" />
+          Ask about this case
+        </h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Answers are grounded strictly in this case's evidence, flags, timeline, and notes above —
+          the AI won't speculate beyond what's recorded here.
+        </p>
+
+        {qaHistory.length > 0 && (
+          <div className="mt-4 space-y-4">
+            {qaHistory.map((qa, i) => (
+              <div key={i} className="space-y-1">
+                <p className="text-sm font-medium text-slate-900">{qa.question}</p>
+                <p className="whitespace-pre-wrap rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  {qa.answer}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {askError && (
+          <div className="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-800">{askError}</div>
+        )}
+
+        <div className="mt-4 flex gap-2">
+          <input
+            value={questionDraft}
+            onChange={(e) => setQuestionDraft(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleAsk()}
+            placeholder="e.g. Why was this flagged as Critical?"
+            className="input-field flex-1"
+          />
+          <button
+            onClick={handleAsk}
+            disabled={asking || !questionDraft.trim()}
+            className="btn-primary flex items-center gap-2 py-1.5"
+          >
+            <Send className="h-4 w-4" />
+            {asking ? "Asking..." : "Ask"}
+          </button>
         </div>
       </section>
     </div>

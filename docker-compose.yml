@@ -22,6 +22,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://audit_intelligence:audit_intelligence@postgres:5432/audit_intelligence
       JWT_SECRET: ${JWT_SECRET:-dev-insecure-secret-change-before-any-real-deploy}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     ports:
       - "8000:8000"
     volumes:

@@ -72,6 +72,24 @@ export interface CaseUpdate {
   add_note?: string;
 }
 
+export interface AskCaseResult {
+  answer: string;
+}
+
+export interface ChartDatapoint {
+  label: string;
+  value: number;
+}
+
+export type ChartGroupBy = "severity" | "status" | "subject_type" | "rule_id" | "created_date";
+
+export interface AnalyticsQueryResult {
+  title: string;
+  group_by: ChartGroupBy;
+  metric: "case_count";
+  data: ChartDatapoint[];
+}
+
 export interface UploadResult {
   dataset_id: string;
   files_received: string[];

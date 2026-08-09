@@ -1,8 +1,10 @@
+import anthropic
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
 from app.core.auth import get_current_tenant
+from app.core.ai import call_claude, get_anthropic_client
 from app.db.models import CaseORM, AnalysisRunORM, TenantORM
 from app.api.schemas import (
     CaseSummaryOut,
@@ -10,9 +12,59 @@ from app.api.schemas import (
     CaseUpdateIn,
     BulkCaseStatusIn,
     BulkCaseStatusOut,
+    CaseAskIn,
+    CaseAskOut,
 )
 
 router = APIRouter(prefix="/cases", tags=["cases"])
+
+CASE_QA_SYSTEM_PROMPT = """You are an assistant embedded in an internal fraud-audit tool. An auditor is asking a question about ONE specific case. Below is that case's complete evidence record, taken verbatim from the case-management database.
+
+Rules — follow these exactly:
+1. Answer using ONLY the information in the CASE RECORD below. Do not use outside knowledge, do not guess, and do not infer facts that are not explicitly present in the record.
+2. If the question cannot be answered from the case record, say so plainly (e.g. "The case record doesn't include that information") instead of speculating.
+3. Never state a number, date, name, or other fact that is not verbatim in the CASE RECORD, or a direct arithmetic computation over numbers that are both verbatim in the record.
+4. When you state a fact, say which flag, evidence item, or note it came from so the auditor can verify it.
+5. Do not offer an investigative conclusion or a verdict on whether fraud occurred — only explain what the evidence shows. That judgment belongs to the auditor.
+6. Keep answers concise.
+
+CASE RECORD:
+{grounding_context}
+"""
+
+
+def _case_to_grounding_text(row: CaseORM) -> str:
+    lines = [
+        f"Case: {row.case_ref}",
+        f"Subject: {row.subject_type} {row.subject_name} ({row.subject_id})",
+        f"Severity: {row.severity}  Risk score: {row.risk_score}  Status: {row.status}",
+        f"Triggered rules: {', '.join(row.triggered_rules) or 'none'}",
+        "",
+        "Evidence:",
+    ]
+    for e in row.evidence:
+        lines.append(f"- {e['label']}: {e['value']}")
+
+    lines += ["", "Flags:"]
+    for f in row.flags:
+        lines.append(f"- [{f['rule_id']}] {f['rule_name']} ({f['severity']}): {f['explanation']}")
+        for e in f.get("evidence", []):
+            lines.append(f"    evidence: {e['label']}: {e['value']}")
+        if f.get("suggested_steps"):
+            lines.append(f"    suggested steps: {'; '.join(f['suggested_steps'])}")
+
+    lines += ["", "Timeline:"]
+    for t in row.timeline:
+        lines.append(f"- {t.get('timestamp', 'undated')}: {t.get('rule_name', '')} — {t.get('explanation', '')}")
+
+    lines += ["", "Related entities:"]
+    for k, v in row.related_entities.items():
+        lines.append(f"- {k}: {', '.join(v)}")
+
+    lines.append("")
+    lines.append(f"Recommended actions: {'; '.join(row.recommended_actions) or 'none'}")
+    lines.append(f"Auditor notes: {'; '.join(row.notes) or 'none'}")
+    return "\n".join(lines)
 
 
 def _latest_run_id(db: Session, tenant_id: int) -> int | None:
@@ -126,3 +178,31 @@ def update_case(
     db.commit()
     db.refresh(row)
     return row
+
+
+@router.post("/{case_id}/ask", response_model=CaseAskOut)
+def ask_case_question(
+    case_id: int,
+    payload: CaseAskIn,
+    db: Session = Depends(get_db),
+    tenant: TenantORM = Depends(get_current_tenant),
+    client: anthropic.Anthropic = Depends(get_anthropic_client),
+):
+    row = db.query(CaseORM).filter(CaseORM.id == case_id, CaseORM.tenant_id == tenant.id).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+    system_prompt = CASE_QA_SYSTEM_PROMPT.format(grounding_context=_case_to_grounding_text(row))
+    response = call_claude(
+        client,
+        max_tokens=1024,
+        system=system_prompt,
+        messages=[{"role": "user", "content": payload.question}],
+    )
+
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    if response.stop_reason == "max_tokens":
+        text += "\n\n[Response was truncated — ask a more specific question.]"
+    if not text:
+        text = "The AI didn't return an answer for this question. Please try rephrasing."
+    return CaseAskOut(answer=text)

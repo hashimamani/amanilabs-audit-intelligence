@@ -945,3 +945,122 @@ correct thing" pattern at this stage (1-2 pilot tenants, pre-revenue).
 - **Access**: `http://34.233.59.94/` (plain HTTP, no domain/TLS yet -
   see section 10 item 1). SSH: `ssh -i ~/.ssh/audit-intelligence-key.pem
   ubuntu@34.233.59.94`.
+
+## 19. GenAI layer: case Q&A + constrained "ask for a chart" analytics (done)
+
+The user asked how to integrate generative AI: probing questions on a
+case's evidence, and generating custom graphs. This is the layer the
+`Case.ai_summary` field has been a placeholder for since the very first
+build - its docstring already stated the non-negotiable constraint: any
+AI layer "must only ever summarize the evidence already attached to this
+case, never invent facts." That rule governed every design choice below.
+`ai_summary` itself remains unused (this feature is a separate `/ask`
+endpoint, not a summary-generation feature) - still a placeholder for a
+future summary feature.
+
+Two features, two different risk profiles:
+
+- **Case Q&A** (`POST /cases/{id}/ask`, added directly into
+  `app/api/routes/cases.py` alongside the other case routes - keeps
+  case-scoped routes together, same reasoning `bulk-status` already
+  established) is low-risk: a case's evidence/flags/timeline is already
+  small and structured, so the whole record is stuffed verbatim into the
+  system prompt (`_case_to_grounding_text`) with strict instructions
+  (`CASE_QA_SYSTEM_PROMPT`) to answer ONLY from that text, cite which
+  flag/evidence item backs each claim, and say plainly when something
+  isn't in the record rather than speculating. Simple context-stuffing,
+  not RAG or tool-calling - safer and simpler for data this size. A
+  single non-streaming `client.messages.create()` call, no adaptive
+  thinking (simple grounded lookup, not complex reasoning), `max_tokens`
+  1024. No Q&A history persistence - ephemeral, kept only in frontend
+  React state, lost on reload; a clean fast-follow if wanted.
+- **"Ask for a chart"** (`POST /analytics/query`, new
+  `app/api/routes/analytics.py`, tenant-wide not case-scoped) is
+  higher-risk: letting an LLM freely generate SQL or invent numbers would
+  violate the no-invented-evidence rule and open a real injection
+  surface. Instead Claude is given exactly ONE tool
+  (`generate_chart(group_by, metric)`, forced via `tool_choice`) with a
+  small enumerated `group_by` (`severity`/`status`/`subject_type`/
+  `rule_id`/`created_date`) and `metric` (`case_count` only, v1). Claude's
+  ONLY job is picking which pre-defined, server-computed aggregation
+  answers the question - it never touches the database and never states
+  a number itself. The backend re-validates the tool call's params
+  against the literal enum again (defense in depth - never trust a
+  model-supplied string blindly, even though `tool_choice` already
+  constrains the schema), then computes real `{label, value}` pairs via
+  plain Python `Counter` over a tenant+latest-run-scoped SQLAlchemy query
+  (not SQL `GROUP BY` on the JSON columns - `db/models.py`'s own
+  docstring already established dialect-specific SQL was deliberately
+  avoided) and a backend-generated title, so there's zero chance of a
+  wording/data mismatch. `rule_id` grouping counts once per rule a case
+  triggered (a case can trigger multiple rules, so totals can exceed case
+  count) - matches `DashboardPage.tsx`'s existing "Most-triggered rules"
+  panel, which already aggregates this exact way client-side. No `filters`
+  param in v1 (left undefined rather than inventing behavior - easy
+  fast-follow once a real question shape needs it). Rendered with a new
+  `src/components/BarChart.tsx` - deliberately not a new charting
+  dependency (none existed before; every v1 dimension is categorical or
+  day-bucketed, which a horizontal bar covers fine) - added as a new
+  section on `DashboardPage.tsx`, no new route/page/nav item.
+
+Both use `claude-opus-4-8` and the official `anthropic` Python SDK.
+**New cost/ops surface, worth flagging directly**: this is the first
+external, per-request-billed dependency in the app. No rate limiting or
+per-tenant cost guard exists yet - acceptable at pre-pilot scale but
+worth knowing before it hits real production traffic.
+
+- **`app/core/ai.py`**: lazy `lru_cache`d Anthropic client singleton
+  behind a FastAPI dependency (`get_anthropic_client`), plus `call_claude`
+  which translates SDK exceptions (rate limit, connection, status errors)
+  into clean HTTP errors instead of a raw 500. `ANTHROPIC_API_KEY` has
+  no safe default (unlike `JWT_SECRET`/`DATABASE_URL`) - it's a real paid
+  external API. `get_anthropic_client` checks the env var directly,
+  before ever touching the SDK, so an unset key fails clean with a 503
+  ("AI features are not configured") instead of crashing on import or
+  breaking unrelated routes - verified both in the test suite (key
+  unset throughout) and in a live browser walkthrough (both panels
+  correctly show the clean 503 message with no key configured). Being a
+  FastAPI dependency, tests override it with `app.dependency_overrides`
+  exactly like `get_db` - no real key or network call in the test suite.
+- **New dependency**: `anthropic` added to the root `requirements.txt`
+  (unpinned, matching this file's existing convention).
+  `docker-compose.yml`'s backend service gets `ANTHROPIC_API_KEY:
+  ${ANTHROPIC_API_KEY}` (no default, unlike `JWT_SECRET`); documented in
+  the root `.env.example`. Leave unset for local dev without AI - the
+  affected routes degrade to a clean 503, nothing else breaks.
+- **Verified**: full pytest suite (38/38, including new
+  `tests/test_case_ai.py` and `tests/test_analytics_ai.py`, both mocking
+  the Anthropic client via `dependency_overrides` - no real key or
+  network call anywhere in the suite). The case Q&A tests assert every
+  real evidence value from a case's `GET /cases/{id}` response appears
+  verbatim in the system prompt actually passed to the (mocked) client -
+  this is the test that enforces "no invented evidence" at the code
+  level, not just in the prompt text. The analytics tests cross-check
+  computed chart data against a hand-built `Counter` from real seeded
+  cases (including a multi-rule case, proving `rule_id` grouping is
+  genuinely per-rule, not accidentally per-case) and confirm an
+  out-of-enum `group_by` from a (mocked) misbehaving model is rejected
+  with 400, not a 500. `npm run build` passing. Confirmed both new routes
+  appear correctly in the live OpenAPI schema. Real browser, local
+  (non-Docker) dev, `ANTHROPIC_API_KEY` deliberately unset: logged in,
+  submitted a question on both the Dashboard's "Ask for a chart" panel
+  and a real case's "Ask about this case" panel, confirmed both correctly
+  surface the clean "AI features are not configured" message (not a raw
+  error dump) via the existing `ApiError`-based error handling - zero
+  frontend changes were needed for that path to work correctly.
+- **Not yet verified - needs a real `ANTHROPIC_API_KEY`**: an actual live
+  Claude call was not exercised (no key available in the environment this
+  was built in, and API keys are never something to fabricate or handle
+  directly). Whoever adds a real key next should sanity-check: ask a case
+  a few real questions and confirm every stated fact traces back to
+  visible evidence on that case; try several chart-question phrasings
+  ("cases by severity", "which rules are firing the most", "break down by
+  status") and confirm Claude picks sensible `group_by` values across
+  real natural-language variety, not just exact test wording; and rebuild
+  the Docker Compose stack with the key set via a root `.env` to confirm
+  both features work through the real nginx `/api` proxy, not just direct
+  local dev.
+- **Explicit non-goals for this pass** (fast-follows, not forgotten): Q&A
+  history persistence, a real charting library (pie/line charts), a
+  `filters` param on the chart tool, per-tenant rate limiting or a cost
+  guard on either endpoint.

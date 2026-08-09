@@ -1,4 +1,6 @@
 import type {
+  AnalyticsQueryResult,
+  AskCaseResult,
   CaseDetail,
   CaseSummary,
   CaseUpdate,
@@ -109,6 +111,20 @@ export function bulkUpdateCaseStatus(
   return request("/cases/bulk-status", {
     method: "PATCH",
     body: JSON.stringify({ case_ids: caseIds, status }),
+  });
+}
+
+export function askCaseQuestion(caseId: number, question: string): Promise<AskCaseResult> {
+  return request(`/cases/${caseId}/ask`, {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
+}
+
+export function queryAnalytics(question: string): Promise<AnalyticsQueryResult> {
+  return request("/analytics/query", {
+    method: "POST",
+    body: JSON.stringify({ question }),
   });
 }
 

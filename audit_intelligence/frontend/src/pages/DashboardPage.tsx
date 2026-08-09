@@ -1,8 +1,17 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertTriangle, CircleDot, Flag as FlagIcon, FolderOpen, PlayCircle } from "lucide-react";
-import { ApiError, listCases, listRuns } from "../api/client";
-import type { CaseSummary, RunSummary, Severity } from "../api/types";
+import {
+  AlertTriangle,
+  CircleDot,
+  Flag as FlagIcon,
+  FolderOpen,
+  PlayCircle,
+  Send,
+  Sparkles,
+} from "lucide-react";
+import { ApiError, listCases, listRuns, queryAnalytics } from "../api/client";
+import type { AnalyticsQueryResult, CaseSummary, RunSummary, Severity } from "../api/types";
+import { BarChart } from "../components/BarChart";
 import { SeverityBadge } from "../components/SeverityBadge";
 
 const SEVERITIES: Severity[] = ["Critical", "High", "Medium", "Low"];
@@ -24,6 +33,24 @@ export function DashboardPage() {
   const [cases, setCases] = useState<CaseSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [chartQuestionDraft, setChartQuestionDraft] = useState("");
+  const [chartResult, setChartResult] = useState<AnalyticsQueryResult | null>(null);
+  const [loadingChart, setLoadingChart] = useState(false);
+  const [chartError, setChartError] = useState<string | null>(null);
+
+  async function handleChartQuery() {
+    if (!chartQuestionDraft.trim()) return;
+    setLoadingChart(true);
+    setChartError(null);
+    try {
+      const result = await queryAnalytics(chartQuestionDraft.trim());
+      setChartResult(result);
+    } catch (e) {
+      setChartError(e instanceof ApiError ? e.message : "Failed to generate a chart.");
+    } finally {
+      setLoadingChart(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -225,6 +252,45 @@ export function DashboardPage() {
           )}
         </section>
       </div>
+
+      <section className="card p-6">
+        <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+          <Sparkles className="h-4 w-4 text-indigo-600" />
+          Ask for a chart
+        </h2>
+        <p className="mt-1 text-sm text-slate-500">
+          e.g. "cases by severity" or "which rules are firing the most" — the AI only picks which of a
+          fixed set of real, server-computed breakdowns to show; it never invents the numbers.
+        </p>
+        <div className="mt-4 flex gap-2">
+          <input
+            value={chartQuestionDraft}
+            onChange={(e) => setChartQuestionDraft(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleChartQuery()}
+            placeholder="Ask a question..."
+            className="input-field flex-1"
+          />
+          <button
+            onClick={handleChartQuery}
+            disabled={loadingChart || !chartQuestionDraft.trim()}
+            className="btn-primary flex items-center gap-2 py-1.5"
+          >
+            <Send className="h-4 w-4" />
+            {loadingChart ? "Asking..." : "Ask"}
+          </button>
+        </div>
+        {chartError && (
+          <div className="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-800">{chartError}</div>
+        )}
+        {chartResult && (
+          <div className="mt-4">
+            <h3 className="text-sm font-medium text-slate-900">{chartResult.title}</h3>
+            <div className="mt-3">
+              <BarChart data={chartResult.data} />
+            </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

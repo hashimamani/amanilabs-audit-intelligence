@@ -82,6 +82,30 @@ class BulkCaseStatusOut(BaseModel):
     updated_count: int
 
 
+class CaseAskIn(BaseModel):
+    question: str
+
+
+class CaseAskOut(BaseModel):
+    answer: str
+
+
+class ChartDatapointOut(BaseModel):
+    label: str
+    value: int
+
+
+class AnalyticsQueryIn(BaseModel):
+    question: str
+
+
+class AnalyticsQueryOut(BaseModel):
+    title: str
+    group_by: str
+    metric: str
+    data: list[ChartDatapointOut]
+
+
 class UserOut(BaseModel):
     id: int
     email: str
