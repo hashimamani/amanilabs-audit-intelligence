@@ -60,8 +60,11 @@ def seeded_cases(client, default_token):
     return resp.json()
 
 
-def _fake_tool_use_client(group_by, metric):
-    block = MagicMock(type="tool_use", input={"group_by": group_by, "metric": metric})
+def _fake_tool_use_client(group_by, metric, filter_rule_id=None):
+    tool_input = {"group_by": group_by, "metric": metric}
+    if filter_rule_id is not None:
+        tool_input["filter_rule_id"] = filter_rule_id
+    block = MagicMock(type="tool_use", input=tool_input)
     # `name=` in the MagicMock() constructor is reserved for the mock's own
     # debug repr, not a settable attribute - assign after construction.
     block.name = "generate_chart"
@@ -72,8 +75,9 @@ def _fake_tool_use_client(group_by, metric):
 
 @pytest.fixture
 def mocked_ai_tool(request):
-    group_by, metric = request.param
-    fake = _fake_tool_use_client(group_by, metric)
+    group_by, metric, *rest = request.param
+    filter_rule_id = rest[0] if rest else None
+    fake = _fake_tool_use_client(group_by, metric, filter_rule_id)
     app.dependency_overrides[get_anthropic_client] = lambda: fake
     yield fake
     app.dependency_overrides.pop(get_anthropic_client, None)
@@ -125,6 +129,30 @@ def test_analytics_created_date_is_a_line_chart(client, default_token, mocked_ai
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["chart_type"] == "line"
+
+
+@pytest.mark.parametrize("mocked_ai_tool", [("created_date", "case_count", "R002")], indirect=True)
+def test_analytics_filter_rule_id_scopes_the_chart(client, default_token, seeded_cases, mocked_ai_tool):
+    resp = client.post(
+        "/analytics/query", json={"question": "trend of R002 cases"}, headers=_headers(default_token)
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "R002 only" in body["title"]
+
+    expected_total = sum(1 for c in seeded_cases if "R002" in c["triggered_rules"])
+    actual_total = sum(d["value"] for d in body["data"])
+    assert actual_total == expected_total
+    assert expected_total > 0, "fixture doesn't exercise any R002 cases"
+    # Sanity check this genuinely filtered something out, not just happened
+    # to match the unfiltered total.
+    assert expected_total < len(seeded_cases)
+
+
+@pytest.mark.parametrize("mocked_ai_tool", [("severity", "case_count", "R999")], indirect=True)
+def test_analytics_rejects_out_of_enum_filter_rule_id(client, default_token, mocked_ai_tool):
+    resp = client.post("/analytics/query", json={"question": "..."}, headers=_headers(default_token))
+    assert resp.status_code == 400
 
 
 def test_analytics_created_date_spans_multiple_runs(client, default_token):

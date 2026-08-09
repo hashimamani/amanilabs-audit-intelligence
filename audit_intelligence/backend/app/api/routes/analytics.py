@@ -26,6 +26,7 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 GROUP_BY_VALUES = ["severity", "status", "subject_type", "rule_id", "created_date"]
 METRIC_VALUES = ["case_count"]
+KNOWN_RULE_IDS = ["R001", "R002", "R003", "R004", "R005", "R006", "R007", "R008", "R009"]
 
 TITLES = {
     "severity": "Cases by severity",
@@ -50,9 +51,13 @@ CHART_TYPE = {
 ANALYTICS_SYSTEM_PROMPT = (
     "You help an auditor explore fraud-case statistics. You never compute or "
     "state any number yourself. Your only job is to call generate_chart, "
-    "picking the group_by and metric that best answer the user's question "
-    "from the fixed set the tool defines. If nothing fits well, pick the "
-    "closest reasonable option."
+    "picking the group_by, metric, and (if the question names one) filter_rule_id "
+    "that best answer the user's question from the fixed set the tool defines. "
+    "If the question asks about a specific rule (e.g. 'R002 cases', 'dormant "
+    "account trend', 'how are large-withdrawal cases trending'), set "
+    "filter_rule_id to that rule so the chart is scoped to it, even while "
+    "group_by is something else like created_date. If nothing fits well, pick "
+    "the closest reasonable option."
 )
 
 GENERATE_CHART_TOOL = {
@@ -75,13 +80,26 @@ GENERATE_CHART_TOOL = {
                     "an employee. 'rule_id' = which fraud-detection rule "
                     "triggered the case — a case can trigger more than one "
                     "rule, so these counts can exceed the total case count. "
-                    "'created_date' = the case's creation date, by day."
+                    "'created_date' = the case's creation date, by day — use "
+                    "this for any 'trend' or 'over time' question, combined "
+                    "with filter_rule_id if the question also names a rule."
                 ),
             },
             "metric": {
                 "type": "string",
                 "enum": METRIC_VALUES,
                 "description": "What to measure per group. Only case_count exists in v1.",
+            },
+            "filter_rule_id": {
+                "type": "string",
+                "enum": KNOWN_RULE_IDS,
+                "description": (
+                    "Optional. Set this when the question names or clearly implies ONE "
+                    "specific fraud-detection rule (e.g. 'R002 cases', 'dormant account "
+                    "reactivation trend', 'large withdrawal cases by severity') to scope "
+                    "the chart to only cases that triggered that rule. Omit entirely for "
+                    "an all-cases breakdown."
+                ),
             },
         },
         "required": ["group_by", "metric"],
@@ -122,8 +140,11 @@ def analytics_query(
     params = tool_use.input if isinstance(tool_use.input, dict) else {}
     group_by = params.get("group_by")
     metric = params.get("metric")
+    filter_rule_id = params.get("filter_rule_id")
     if group_by not in GROUP_BY_VALUES or metric not in METRIC_VALUES:
         raise HTTPException(status_code=400, detail="Unsupported chart request from AI")
+    if filter_rule_id is not None and filter_rule_id not in KNOWN_RULE_IDS:
+        raise HTTPException(status_code=400, detail="Unsupported rule filter from AI")
 
     # created_date is a time series - it should span the tenant's whole case
     # history, not just the latest run. A single analysis run creates all its
@@ -142,6 +163,9 @@ def analytics_query(
             else []
         )
 
+    if filter_rule_id:
+        rows = [r for r in rows if filter_rule_id in r.triggered_rules]
+
     counts: Counter = Counter()
     if group_by == "rule_id":
         for row in rows:
@@ -155,8 +179,9 @@ def analytics_query(
             counts[getattr(row, group_by)] += 1
 
     data = [ChartDatapointOut(label=label, value=value) for label, value in sorted(counts.items())]
+    title = f"{TITLES[group_by]} — {filter_rule_id} only" if filter_rule_id else TITLES[group_by]
     return AnalyticsQueryOut(
-        title=TITLES[group_by],
+        title=title,
         group_by=group_by,
         metric=metric,
         chart_type=CHART_TYPE[group_by],
