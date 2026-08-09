@@ -101,7 +101,7 @@ def generate_report(
     )
     response = call_claude(
         client,
-        max_tokens=4096,
+        max_tokens=8192,
         system=REPORT_SYSTEM_PROMPT.format(grounding_context=batch),
         messages=[{"role": "user", "content": "Draft the report."}],
     )
