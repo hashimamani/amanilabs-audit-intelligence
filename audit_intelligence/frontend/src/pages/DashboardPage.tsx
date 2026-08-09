@@ -260,8 +260,9 @@ export function DashboardPage() {
           Ask for a chart
         </h2>
         <p className="mt-1 text-sm text-slate-500">
-          e.g. "cases by severity" or "which rules are firing the most" — the AI only picks which of a
-          fixed set of real, server-computed breakdowns to show; it never invents the numbers.
+          e.g. "average risk score for R001 cases" or "trend of Critical cases this month" — the AI
+          writes and runs real code against your actual case data; it never states a number it hasn't
+          computed.
         </p>
         <div className="mt-4 flex gap-2">
           <input

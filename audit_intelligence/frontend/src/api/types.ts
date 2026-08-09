@@ -81,13 +81,10 @@ export interface ChartDatapoint {
   value: number;
 }
 
-export type ChartGroupBy = "severity" | "status" | "subject_type" | "rule_id" | "created_date";
 export type ChartType = "bar" | "line";
 
 export interface AnalyticsQueryResult {
   title: string;
-  group_by: ChartGroupBy;
-  metric: "case_count";
   chart_type: ChartType;
   data: ChartDatapoint[];
 }

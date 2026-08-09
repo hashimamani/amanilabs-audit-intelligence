@@ -1,16 +1,20 @@
 """
-Constrained "ask for a chart" analytics. Claude never sees raw case data,
-never writes SQL, and never states a number itself - it only picks WHICH of
-a small, fixed set of server-computed aggregations (via a single forced
-tool call) answers the auditor's question. The backend re-validates the
-tool call's params against the same literal enum before running anything
-(defense in depth - never trust a model-supplied string blindly, even
-though tool_choice already constrains the schema), then computes and
-labels the real numbers itself. See PROJECT_CONTEXT.md for the full
-reasoning tying this back to the product's "never invent evidence" rule.
+"Ask for a chart" analytics, backed by Claude's code execution tool.
+Claude never STATES a number - it writes and runs real Python/pandas
+code against the tenant's real (privacy-minimized) case data, and the
+code's own printed output is the chart. A number produced by code that
+actually ran against real rows isn't invented, it's computed - same
+"never invent evidence" guarantee the rest of this app relies on, just
+enforced by execution instead of by an enumerated menu. The backend
+still validates the STRUCTURE of what Claude prints (never trust
+model-authored JSON shape blindly) even though the VALUES inside it are
+already trustworthy. See PROJECT_CONTEXT.md for the full reasoning,
+including why the earlier enum-based design was replaced.
 """
 
-from collections import Counter
+import csv
+import io
+import json
 
 import anthropic
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,101 +24,86 @@ from app.api.schemas import AnalyticsQueryIn, AnalyticsQueryOut, ChartDatapointO
 from app.core.ai import call_claude, get_anthropic_client
 from app.core.auth import get_current_tenant
 from app.core.db import get_db
-from app.db.models import AnalysisRunORM, CaseORM, TenantORM
+from app.db.models import CaseORM, TenantORM
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
-GROUP_BY_VALUES = ["severity", "status", "subject_type", "rule_id", "created_date"]
-METRIC_VALUES = ["case_count"]
-KNOWN_RULE_IDS = ["R001", "R002", "R003", "R004", "R005", "R006", "R007", "R008", "R009"]
+ANALYTICS_SYSTEM_PROMPT = """You are a data-analysis assistant helping a SACCO fraud auditor explore their case statistics. You have a Python code execution tool with pandas available.
 
-TITLES = {
-    "severity": "Cases by severity",
-    "status": "Cases by status",
-    "subject_type": "Cases by subject type",
-    "rule_id": "Cases per triggered rule (a case may count toward more than one rule)",
-    "created_date": "Cases by creation date",
-}
+Below is the tenant's real case data as CSV. Each row is one case; a case can trigger more than one rule (triggered_rules is a semicolon-separated list).
 
-# Chart type is derived from the dimension, never chosen by Claude - keeps
-# the "model only picks WHICH real thing, never decides presentation" rule
-# intact. created_date is inherently a time series; everything else is a
-# categorical snapshot.
-CHART_TYPE = {
-    "severity": "bar",
-    "status": "bar",
-    "subject_type": "bar",
-    "rule_id": "bar",
-    "created_date": "line",
-}
+CASE DATA (CSV):
+{case_data}
 
-ANALYTICS_SYSTEM_PROMPT = (
-    "You help an auditor explore fraud-case statistics. You never compute or "
-    "state any number yourself. Your only job is to call generate_chart, "
-    "picking the group_by, metric, and (if the question names one) filter_rule_id "
-    "that best answer the user's question from the fixed set the tool defines. "
-    "If the question asks about a specific rule (e.g. 'R002 cases', 'dormant "
-    "account trend', 'how are large-withdrawal cases trending'), set "
-    "filter_rule_id to that rule so the chart is scoped to it, even while "
-    "group_by is something else like created_date. If nothing fits well, pick "
-    "the closest reasonable option."
-)
-
-GENERATE_CHART_TOOL = {
-    "name": "generate_chart",
-    "description": (
-        "Select the pre-defined, server-computed aggregation that answers the "
-        "user's question about their fraud-audit case data. You do not compute "
-        "numbers yourself — you only choose which aggregation to run."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "group_by": {
-                "type": "string",
-                "enum": GROUP_BY_VALUES,
-                "description": (
-                    "'severity' = case severity (Low/Medium/High/Critical). "
-                    "'status' = case status (Open/In Progress/Closed). "
-                    "'subject_type' = whether the case's subject is a member or "
-                    "an employee. 'rule_id' = which fraud-detection rule "
-                    "triggered the case — a case can trigger more than one "
-                    "rule, so these counts can exceed the total case count. "
-                    "'created_date' = the case's creation date, by day — use "
-                    "this for any 'trend' or 'over time' question, combined "
-                    "with filter_rule_id if the question also names a rule."
-                ),
-            },
-            "metric": {
-                "type": "string",
-                "enum": METRIC_VALUES,
-                "description": "What to measure per group. Only case_count exists in v1.",
-            },
-            "filter_rule_id": {
-                "type": "string",
-                "enum": KNOWN_RULE_IDS,
-                "description": (
-                    "Optional. Set this when the question names or clearly implies ONE "
-                    "specific fraud-detection rule (e.g. 'R002 cases', 'dormant account "
-                    "reactivation trend', 'large withdrawal cases by severity') to scope "
-                    "the chart to only cases that triggered that rule. Omit entirely for "
-                    "an all-cases breakdown."
-                ),
-            },
-        },
-        "required": ["group_by", "metric"],
-    },
-}
+Rules — follow these exactly:
+1. To answer the question, WRITE AND RUN Python code (pandas) that loads this CSV and computes the real answer. Never state a number without having actually computed it in code that ran — you are not allowed to estimate or eyeball a number from looking at the data.
+2. Your code's FINAL print statement must be exactly one JSON object with this shape, and nothing else in that print call:
+   {{"title": "<short chart title>", "chart_type": "bar" or "line", "data": [{{"label": "<string>", "value": <number>}}, ...]}}
+3. Use chart_type "line" only when the x-axis is a real time sequence (e.g. grouped by date); use "bar" for any categorical breakdown.
+4. Each case belongs to an analysis run (run_id column). For a snapshot question (e.g. "cases by severity" with no time aspect), use only the most recent run_id. For a trend/history question (e.g. "over time", "this month vs last"), use all runs.
+5. If the question can't be answered from this data, still print valid JSON with an empty data list and a title explaining why.
+6. The data given has already been stripped of case references and member names/IDs — work only with the columns provided. Never invent a case reference, member name, or ID that isn't in this data.
+"""
 
 
-def _latest_run_id(db: Session, tenant_id: int) -> int | None:
-    latest = (
-        db.query(AnalysisRunORM)
-        .filter(AnalysisRunORM.tenant_id == tenant_id)
-        .order_by(AnalysisRunORM.created_at.desc())
-        .first()
-    )
-    return latest.id if latest else None
+def _cases_to_csv(rows: list[CaseORM]) -> str:
+    """Privacy-minimized: no case_ref, subject_id, or subject_name - charts
+    are about aggregates, never about identifying a specific member. Case
+    Q&A and the report generator already own "tell me about this case"."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["run_id", "severity", "status", "subject_type", "triggered_rules", "risk_score", "created_at"])
+    for r in rows:
+        writer.writerow(
+            [r.run_id, r.severity, r.status, r.subject_type, ";".join(r.triggered_rules), r.risk_score, r.created_at.isoformat()]
+        )
+    return buf.getvalue()
+
+
+def _extract_chart(response) -> AnalyticsQueryOut | None:
+    stdout = None
+    for block in response.content:
+        if block.type == "bash_code_execution_tool_result":
+            result = block.content
+            if getattr(result, "type", None) == "bash_code_execution_result" and result.return_code == 0:
+                stdout = result.stdout  # keep the LAST successful execution's output
+
+    if not stdout:
+        return None
+
+    parsed = None
+    candidates = [stdout.strip()]
+    lines = stdout.strip().splitlines()
+    if lines:
+        candidates.append(lines[-1])
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+            break
+        except ValueError:
+            continue
+    if not isinstance(parsed, dict):
+        return None
+
+    title = parsed.get("title")
+    chart_type = parsed.get("chart_type")
+    data = parsed.get("data")
+    if not isinstance(title, str) or chart_type not in ("bar", "line") or not isinstance(data, list):
+        return None
+
+    points = []
+    for item in data:
+        if not isinstance(item, dict):
+            return None
+        label = item.get("label")
+        value = item.get("value")
+        if not isinstance(label, str) or not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        points.append(ChartDatapointOut(label=label, value=value))
+
+    return AnalyticsQueryOut(title=title, chart_type=chart_type, data=points)
 
 
 @router.post("/query", response_model=AnalyticsQueryOut)
@@ -124,66 +113,28 @@ def analytics_query(
     tenant: TenantORM = Depends(get_current_tenant),
     client: anthropic.Anthropic = Depends(get_anthropic_client),
 ):
-    response = call_claude(
-        client,
-        max_tokens=256,
-        system=ANALYTICS_SYSTEM_PROMPT,
-        tools=[GENERATE_CHART_TOOL],
-        tool_choice={"type": "tool", "name": "generate_chart"},
-        messages=[{"role": "user", "content": payload.question}],
+    rows = db.query(CaseORM).filter(CaseORM.tenant_id == tenant.id).all()
+    if not rows:
+        return AnalyticsQueryOut(title="No cases yet — run an analysis first.", chart_type="bar", data=[])
+
+    system_prompt = ANALYTICS_SYSTEM_PROMPT.format(case_data=_cases_to_csv(rows))
+    messages = [{"role": "user", "content": payload.question}]
+    kwargs = dict(
+        max_tokens=8192,
+        thinking={"type": "adaptive"},
+        system=system_prompt,
+        tools=[{"type": "code_execution_20260120", "name": "code_execution"}],
     )
+    response = call_claude(client, messages=messages, **kwargs)
 
-    tool_use = next((b for b in response.content if b.type == "tool_use"), None)
-    if tool_use is None or tool_use.name != "generate_chart":
-        raise HTTPException(status_code=502, detail="AI did not return a valid chart request")
+    # The server-side code-execution loop hit its iteration cap - resend to
+    # continue. Per the documented pattern, no extra "Continue" message is
+    # needed; the API detects the trailing server_tool_use and resumes.
+    if response.stop_reason == "pause_turn":
+        messages = [messages[0], {"role": "assistant", "content": response.content}]
+        response = call_claude(client, messages=messages, **kwargs)
 
-    params = tool_use.input if isinstance(tool_use.input, dict) else {}
-    group_by = params.get("group_by")
-    metric = params.get("metric")
-    filter_rule_id = params.get("filter_rule_id")
-    if group_by not in GROUP_BY_VALUES or metric not in METRIC_VALUES:
-        raise HTTPException(status_code=400, detail="Unsupported chart request from AI")
-    if filter_rule_id is not None and filter_rule_id not in KNOWN_RULE_IDS:
-        raise HTTPException(status_code=400, detail="Unsupported rule filter from AI")
-
-    # created_date is a time series - it should span the tenant's whole case
-    # history, not just the latest run. A single analysis run creates all its
-    # cases in one batch, so scoping it to "latest run only" (like every
-    # other dimension, which IS the correct scope for a snapshot breakdown)
-    # would show one spike on one day instead of a trend.
-    if group_by == "created_date":
-        rows = db.query(CaseORM).filter(CaseORM.tenant_id == tenant.id).all()
-    else:
-        run_id = _latest_run_id(db, tenant.id)
-        rows = (
-            db.query(CaseORM)
-            .filter(CaseORM.tenant_id == tenant.id, CaseORM.run_id == run_id)
-            .all()
-            if run_id is not None
-            else []
-        )
-
-    if filter_rule_id:
-        rows = [r for r in rows if filter_rule_id in r.triggered_rules]
-
-    counts: Counter = Counter()
-    if group_by == "rule_id":
-        for row in rows:
-            for rule_id in row.triggered_rules:
-                counts[rule_id] += 1
-    elif group_by == "created_date":
-        for row in rows:
-            counts[row.created_at.date().isoformat()] += 1
-    else:
-        for row in rows:
-            counts[getattr(row, group_by)] += 1
-
-    data = [ChartDatapointOut(label=label, value=value) for label, value in sorted(counts.items())]
-    title = f"{TITLES[group_by]} — {filter_rule_id} only" if filter_rule_id else TITLES[group_by]
-    return AnalyticsQueryOut(
-        title=title,
-        group_by=group_by,
-        metric=metric,
-        chart_type=CHART_TYPE[group_by],
-        data=data,
-    )
+    chart = _extract_chart(response)
+    if chart is None:
+        raise HTTPException(status_code=502, detail="AI did not return a valid chart")
+    return chart

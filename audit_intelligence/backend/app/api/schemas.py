@@ -92,7 +92,7 @@ class CaseAskOut(BaseModel):
 
 class ChartDatapointOut(BaseModel):
     label: str
-    value: int
+    value: float
 
 
 class AnalyticsQueryIn(BaseModel):
@@ -101,8 +101,6 @@ class AnalyticsQueryIn(BaseModel):
 
 class AnalyticsQueryOut(BaseModel):
     title: str
-    group_by: str
-    metric: str
     chart_type: str
     data: list[ChartDatapointOut]
 

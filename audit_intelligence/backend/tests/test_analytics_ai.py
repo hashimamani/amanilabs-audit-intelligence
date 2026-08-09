@@ -1,15 +1,24 @@
 """
 Analytics "ask for a chart" endpoint, exercised through the real API layer.
-The Anthropic client is mocked to return a forced generate_chart tool_use
-block - these tests verify the backend's own aggregation/enum-validation
-logic (the part that actually guarantees no invented numbers), not the
-model's chart-picking judgment. No real key, no network call.
+Since the actual aggregation now happens in Claude-authored code running in
+a sandbox (not in this codebase), these tests can't meaningfully assert a
+specific computed answer - verifying that is exactly what the enum-based
+predecessor did, and exactly what limited it (see PROJECT_CONTEXT.md for
+the full reasoning behind the redesign). What's still under this codebase's
+control, and what these tests verify instead: the case data actually
+handed to the model (real, privacy-minimized, spans all runs), and the
+response parsing/validation logic (never trust the model's printed JSON
+shape blindly, even though the numbers inside it are already trustworthy
+because they came from code that actually ran). No real key, no network
+call anywhere in this file.
 """
 
+import csv
+import io
+import json
 import os
 import sys
 import tempfile
-from collections import Counter
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -26,6 +35,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.core.ai import get_anthropic_client
 from app.core.auth import DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_DEV_PASSWORD
+from app.scripts.create_tenant import create_tenant
 
 
 @pytest.fixture(scope="module")
@@ -50,136 +60,140 @@ def default_token(client):
 
 
 @pytest.fixture(scope="module")
-def seeded_cases(client, default_token):
+def other_tenant_token(client):
+    admin, password = create_tenant(
+        "analytics-ai-other", "Other Tenant", "analytics-ai-admin@example.com", "Analytics AI Admin"
+    )
+    return _login(client, admin.email, password)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def ensure_seeded(client, default_token):
+    # Guarantees the default tenant has at least one run/case before any
+    # test needs real data, regardless of test execution order.
     client.post("/analysis/run", json={}, headers=_headers(default_token))
-    # limit=200 (the max page size) so this actually captures every case,
-    # not just the default page of 50 - matches the max the rest of the app
-    # already relies on at this project's case volumes (dozens, not
-    # thousands; see DashboardPage.tsx's client-side aggregation precedent).
-    resp = client.get("/cases?limit=200", headers=_headers(default_token))
-    return resp.json()
 
 
-def _fake_tool_use_client(group_by, metric, filter_rule_id=None):
-    tool_input = {"group_by": group_by, "metric": metric}
-    if filter_rule_id is not None:
-        tool_input["filter_rule_id"] = filter_rule_id
-    block = MagicMock(type="tool_use", input=tool_input)
-    # `name=` in the MagicMock() constructor is reserved for the mock's own
-    # debug repr, not a settable attribute - assign after construction.
-    block.name = "generate_chart"
+def _bash_result_block(stdout: str, return_code: int = 0):
+    result_content = MagicMock(type="bash_code_execution_result", stdout=stdout, stderr="", return_code=return_code)
+    return MagicMock(type="bash_code_execution_tool_result", content=result_content)
+
+
+def _fake_client_returning_chart(chart: dict):
     fake = MagicMock()
-    fake.messages.create.return_value = MagicMock(content=[block])
+    fake.messages.create.return_value = MagicMock(
+        content=[_bash_result_block(json.dumps(chart))], stop_reason="end_turn"
+    )
     return fake
 
 
+def _query_with_mock(client, token, fake, question="..."):
+    app.dependency_overrides[get_anthropic_client] = lambda: fake
+    try:
+        return client.post("/analytics/query", json={"question": question}, headers=_headers(token))
+    finally:
+        app.dependency_overrides.pop(get_anthropic_client, None)
+
+
+def _extract_csv_from_prompt(system_prompt: str) -> str:
+    marker = "CASE DATA (CSV):\n"
+    start = system_prompt.index(marker) + len(marker)
+    end = system_prompt.index("\n\nRules —")
+    return system_prompt[start:end]
+
+
 @pytest.fixture
-def mocked_ai_tool(request):
-    group_by, metric, *rest = request.param
-    filter_rule_id = rest[0] if rest else None
-    fake = _fake_tool_use_client(group_by, metric, filter_rule_id)
+def mocked_ai():
+    fake = _fake_client_returning_chart(
+        {"title": "Cases by severity", "chart_type": "bar", "data": [{"label": "Critical", "value": 5}]}
+    )
     app.dependency_overrides[get_anthropic_client] = lambda: fake
     yield fake
     app.dependency_overrides.pop(get_anthropic_client, None)
 
 
-@pytest.mark.parametrize("mocked_ai_tool", [("severity", "case_count")], indirect=True)
-def test_analytics_severity_groupby_matches_real_counts(client, default_token, seeded_cases, mocked_ai_tool):
-    resp = client.post("/analytics/query", json={"question": "cases by severity"}, headers=_headers(default_token))
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["group_by"] == "severity"
-    assert body["chart_type"] == "bar"
+def test_analytics_csv_excludes_pii_and_spans_all_runs(client, default_token, mocked_ai):
+    run_a = client.post("/analysis/run", json={}, headers=_headers(default_token)).json()
+    run_b = client.post("/analysis/run", json={}, headers=_headers(default_token)).json()
+    cases_b = client.get(f"/cases?run_id={run_b['id']}&limit=200", headers=_headers(default_token)).json()
 
-    expected = Counter(c["severity"] for c in seeded_cases)
-    actual = {d["label"]: d["value"] for d in body["data"]}
-    assert actual == dict(expected)
-
-
-@pytest.mark.parametrize("mocked_ai_tool", [("rule_id", "case_count")], indirect=True)
-def test_analytics_rule_id_groupby_counts_once_per_rule(client, default_token, seeded_cases, mocked_ai_tool):
     resp = client.post(
-        "/analytics/query", json={"question": "which rules fire most"}, headers=_headers(default_token)
+        "/analytics/query", json={"question": "cases by severity"}, headers=_headers(default_token)
     )
     assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["chart_type"] == "bar"
 
-    expected: Counter = Counter()
-    for c in seeded_cases:
-        for rule_id in c["triggered_rules"]:
-            expected[rule_id] += 1
-    actual = {d["label"]: d["value"] for d in body["data"]}
-    assert actual == dict(expected)
-    # A case triggering 2+ rules proves this is genuinely per-rule, not
-    # accidentally degenerating into per-case counting.
-    assert any(len(c["triggered_rules"]) > 1 for c in seeded_cases), "fixture doesn't exercise a multi-rule case"
+    system_prompt = mocked_ai.messages.create.call_args.kwargs["system"]
+    csv_text = _extract_csv_from_prompt(system_prompt)
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    run_ids_in_csv = {row["run_id"] for row in rows}
+    assert str(run_a["id"]) in run_ids_in_csv
+    assert str(run_b["id"]) in run_ids_in_csv
 
-
-@pytest.mark.parametrize("mocked_ai_tool", [("loan_amount", "case_count")], indirect=True)
-def test_analytics_rejects_out_of_enum_group_by(client, default_token, mocked_ai_tool):
-    resp = client.post("/analytics/query", json={"question": "..."}, headers=_headers(default_token))
-    assert resp.status_code == 400
+    for c in cases_b:
+        assert c["case_ref"] not in system_prompt
+        assert c["subject_id"] not in system_prompt
+        assert c["subject_name"] not in system_prompt
 
 
-@pytest.mark.parametrize("mocked_ai_tool", [("created_date", "case_count")], indirect=True)
-def test_analytics_created_date_is_a_line_chart(client, default_token, mocked_ai_tool):
-    resp = client.post(
-        "/analytics/query", json={"question": "cases over time"}, headers=_headers(default_token)
+def test_analytics_returns_valid_chart_from_code_execution(client, default_token):
+    chart = {
+        "title": "Average risk score for R001 cases",
+        "chart_type": "bar",
+        "data": [{"label": "R001", "value": 63.4}],
+    }
+    fake = _fake_client_returning_chart(chart)
+    resp = _query_with_mock(client, default_token, fake, "average risk score for R001 cases")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == chart
+
+
+def test_analytics_502_when_no_code_execution_block(client, default_token):
+    fake = MagicMock()
+    fake.messages.create.return_value = MagicMock(
+        content=[MagicMock(type="text", text="I can't help with that")], stop_reason="end_turn"
     )
+    resp = _query_with_mock(client, default_token, fake)
+    assert resp.status_code == 502
+
+
+def test_analytics_502_when_stdout_is_malformed_json(client, default_token):
+    fake = MagicMock()
+    fake.messages.create.return_value = MagicMock(content=[_bash_result_block("not valid json")], stop_reason="end_turn")
+    resp = _query_with_mock(client, default_token, fake)
+    assert resp.status_code == 502
+
+
+def test_analytics_502_when_chart_json_missing_required_keys(client, default_token):
+    fake = _fake_client_returning_chart({"title": "x"})
+    resp = _query_with_mock(client, default_token, fake)
+    assert resp.status_code == 502
+
+
+def test_analytics_502_when_chart_type_invalid(client, default_token):
+    fake = _fake_client_returning_chart({"title": "x", "chart_type": "pie", "data": []})
+    resp = _query_with_mock(client, default_token, fake)
+    assert resp.status_code == 502
+
+
+def test_analytics_no_cases_returns_empty_chart_without_calling_ai(client, other_tenant_token):
+    fake = MagicMock()
+    resp = _query_with_mock(client, other_tenant_token, fake, "cases by severity")
     assert resp.status_code == 200, resp.text
-    assert resp.json()["chart_type"] == "line"
+    assert resp.json()["data"] == []
+    fake.messages.create.assert_not_called()
 
 
-@pytest.mark.parametrize("mocked_ai_tool", [("created_date", "case_count", "R002")], indirect=True)
-def test_analytics_filter_rule_id_scopes_the_chart(client, default_token, seeded_cases, mocked_ai_tool):
-    resp = client.post(
-        "/analytics/query", json={"question": "trend of R002 cases"}, headers=_headers(default_token)
-    )
+def test_analytics_resubmits_on_pause_turn(client, default_token):
+    chart = {"title": "Cases by status", "chart_type": "bar", "data": [{"label": "Open", "value": 3}]}
+    first = MagicMock(content=[MagicMock(type="text", text="working")], stop_reason="pause_turn")
+    second = MagicMock(content=[_bash_result_block(json.dumps(chart))], stop_reason="end_turn")
+    fake = MagicMock()
+    fake.messages.create.side_effect = [first, second]
+
+    resp = _query_with_mock(client, default_token, fake, "cases by status")
     assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert "R002 only" in body["title"]
-
-    expected_total = sum(1 for c in seeded_cases if "R002" in c["triggered_rules"])
-    actual_total = sum(d["value"] for d in body["data"])
-    assert actual_total == expected_total
-    assert expected_total > 0, "fixture doesn't exercise any R002 cases"
-    # Sanity check this genuinely filtered something out, not just happened
-    # to match the unfiltered total.
-    assert expected_total < len(seeded_cases)
-
-
-@pytest.mark.parametrize("mocked_ai_tool", [("severity", "case_count", "R999")], indirect=True)
-def test_analytics_rejects_out_of_enum_filter_rule_id(client, default_token, mocked_ai_tool):
-    resp = client.post("/analytics/query", json={"question": "..."}, headers=_headers(default_token))
-    assert resp.status_code == 400
-
-
-def test_analytics_created_date_spans_multiple_runs(client, default_token):
-    # Trigger a second run so there's more than one run to prove this spans.
-    client.post("/analysis/run", json={}, headers=_headers(default_token))
-
-    all_runs = client.get("/analysis/runs", headers=_headers(default_token)).json()
-    assert len(all_runs) >= 2, "need at least 2 runs to prove this isn't just the latest run"
-
-    expected_total = 0
-    for run in all_runs:
-        cases = client.get(f"/cases?run_id={run['id']}&limit=200", headers=_headers(default_token)).json()
-        expected_total += len(cases)
-
-    fake = _fake_tool_use_client("created_date", "case_count")
-    app.dependency_overrides[get_anthropic_client] = lambda: fake
-    try:
-        resp = client.post(
-            "/analytics/query", json={"question": "cases over time"}, headers=_headers(default_token)
-        )
-    finally:
-        app.dependency_overrides.pop(get_anthropic_client, None)
-
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    actual_total = sum(d["value"] for d in body["data"])
-    assert actual_total == expected_total
+    assert resp.json() == chart
+    assert fake.messages.create.call_count == 2
 
 
 def test_analytics_503_when_key_unset(client, default_token, monkeypatch):
