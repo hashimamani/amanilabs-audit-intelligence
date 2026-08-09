@@ -1085,3 +1085,100 @@ worth knowing before it hits real production traffic.
   on the live DB (no `delete_tenant` script exists, and hand-writing a
   DELETE against production wasn't worth the risk for a harmless,
   fully-isolated extra tenant row) - safe to ignore or remove later.
+
+## 20. AI board report generator + multi-chart-type analytics (done)
+
+Direct follow-up to section 19: the user wanted to explore genuinely
+different AI capabilities rather than just "more of the same," and asked
+to start with the one most likely to move a real conversation - an
+AI-drafted board report, since the founder personally presents to SACCO
+boards. Separately, the chart panel was upgraded from a single hand-rolled
+bar chart to real bar/line chart variety.
+
+- **`POST /reports/generate`** (new `app/api/routes/reports.py`,
+  tenant-wide like `/analytics`, not case-scoped): batches multiple
+  cases' evidence through the exact same grounding discipline as case
+  Q&A - `case_to_grounding_text` (moved from `routes/cases.py` to
+  `core/ai.py` so both routes share it, one function, no duplication) is
+  called per case and concatenated with clear `=== Case: ... ===`
+  boundaries into one system prompt. Same non-negotiables as case Q&A:
+  never state a fact not verbatim in the records, cite which flag/
+  evidence backs each claim, and explicitly never render a fraud
+  verdict - that stays with the audit team and board.
+  - **Case selection**: explicit `case_ids` (reuses `CaseListPage.tsx`'s
+    existing multi-select checkboxes from the bulk-status feature) are
+    tenant-filtered and hard-capped at `MAX_REPORT_CASES = 50` (400 if
+    exceeded, never silently truncated). With no selection, defaults to
+    the latest run's Critical+High cases by risk score, capped at
+    `DEFAULT_REPORT_CASE_LIMIT = 20` - a board doesn't want all 91 cases
+    narrated. An empty result returns a plain message without ever
+    calling Claude.
+  - **Output is plain text only in this pass** - on-screen (new
+    `<section>` on `CaseListPage.tsx`, `whitespace-pre-wrap`, matching
+    the case Q&A answer style) plus a "Download as text" button (new
+    `downloadText` in `src/lib/csv.ts`, generalized from the existing
+    `downloadCsv` Blob-download pattern). No Word/PDF generation - a
+    well-scoped fast-follow if wanted (a `docx` skill is available for
+    that later).
+  - **Real bug found via live testing, fixed**: the first live report
+    (20 real Critical+High cases against the deployed pilot) hit the
+    initial `max_tokens=4096` cap and was cut off mid-sentence. Raised to
+    8192 (still well under the ~16k threshold where non-streaming risks
+    an SDK timeout) and re-verified live: a full, complete 20-case report
+    ending in a proper closing statement, no truncation.
+- **Multi-chart-type analytics** (`app/api/routes/analytics.py`):
+  - `chart_type` (`"bar"` or `"line"`) is derived server-side from
+    `group_by` via a fixed dict, **never chosen by Claude** - keeps the
+    "model only picks which real thing, never decides presentation"
+    rule intact from section 19. `created_date` is the only `"line"`
+    dimension; everything else stays `"bar"`.
+  - **Real scoping bug found and fixed while building this**: every
+    `group_by` dimension, including `created_date`, was scoped to the
+    latest analysis run only. Since one run creates all its cases in a
+    single batch, a "cases by day" chart on that scope would show one
+    spike on one day, not a trend - the bug wasn't visible until line
+    charts made it matter. Fixed by branching the row-fetch:
+    `created_date` now spans the tenant's whole case history across all
+    runs; every other dimension keeps the latest-run-only scope, which
+    is correct for a snapshot breakdown. New test
+    (`test_analytics_created_date_spans_multiple_runs`) seeds two
+    separate runs and asserts the total spans both - the direct
+    regression test for this.
+  - Frontend: `recharts` added as a new dependency (`npm install
+    recharts`) - the first charting library in this project. Loaded the
+    `dataviz` skill before writing any chart code; since every chart here
+    is single-series, the relevant guidance was: reuse the app's
+    *existing* severity colors (`SeverityBadge.tsx`'s red/orange/amber/
+    slate) for the severity breakdown specifically, rather than a
+    generic categorical palette, since severity already carries real
+    meaning for auditors; a single indigo accent for every other
+    dimension; thin marks, tooltips, and recessive gridlines everywhere.
+    `BarChart.tsx` was migrated from its original hand-rolled `<span>`
+    bars to `recharts` (same external prop shape, so `DashboardPage.tsx`
+    didn't need to change how it's called), and a new `LineChart.tsx`
+    added - both now read as one visual system instead of one hand-rolled
+    style sitting next to a library-rendered one.
+  - **Bundle-size cost, noted not fixed**: `recharts` grew the frontend
+    JS bundle from ~281KB to ~671KB (gzipped ~199KB). Acceptable for an
+    internal tool used by a handful of staff; code-splitting is a fast-
+    follow if it ever becomes a real problem, not done here since it
+    wasn't asked for and the current size isn't causing any actual issue.
+- **Verified**: full pytest suite (50/50, including new
+  `tests/test_reports_ai.py` and the extended `test_analytics_ai.py` -
+  all still mock the Anthropic client, zero real network calls or API
+  key needed to run the suite). `npm run build` clean. Deployed to the
+  live pilot (`rsync` + `sudo docker compose up -d --build`, same
+  mechanism as section 19) and live-tested against real Claude responses
+  using the existing `ai-smoke-test` throwaway tenant: a full untruncated
+  20-case board report (evidence-cited per case, correctly refusing to
+  render a fraud verdict) and both chart types returning `chart_type`-
+  correct, numerically accurate results for varied natural-language
+  phrasings. UI rendering (bar chart with severity colors, line chart
+  with a smooth trend, the report panel's text formatting and download
+  button) was visually confirmed via the local dev server with the
+  actual deployed component code and a mocked API response, since the
+  browser tool hit the same transient outage against the live IP
+  documented in section 18 - a real gap only in "saw the live site
+  rendered with my own eyes," not in "the deployed code and data are
+  correct," which was independently confirmed via curl against the real
+  endpoints.
