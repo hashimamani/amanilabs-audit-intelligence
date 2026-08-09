@@ -1182,3 +1182,23 @@ bar chart to real bar/line chart variety.
   rendered with my own eyes," not in "the deployed code and data are
   correct," which was independently confirmed via curl against the real
   endpoints.
+
+**Real user-reported bug, found immediately after deploy, fixed same
+day**: asking "trend of R002 cases" rendered an all-cases date breakdown,
+silently ignoring "R002." Root cause: `generate_chart` had no way to
+scope by a specific rule while grouping by something else like
+`created_date` - exactly the `filters` gap called out as deferred above.
+Fixed by adding an optional `filter_rule_id` parameter to the tool
+(re-validated server-side against the 9 real rule IDs, same defense-in-
+depth as `group_by`/`metric`); the backend filters the case set before
+aggregating, and the returned `title` reflects the applied filter (e.g.
+"Cases by creation date — R002 only") so it's never ambiguous what's
+actually shown. Covered by two new tests
+(`test_analytics_filter_rule_id_scopes_the_chart`,
+`test_analytics_rejects_out_of_enum_filter_rule_id`) - full suite 47/47.
+Live-reverified on the deployed pilot with the exact reported question:
+correctly returns `filter_rule_id: R002`, title "Cases by creation
+date — R002 only", and a count of 10 - matching R002's real, documented
+count in this dataset (section 4's `dormant_account_raid` scenario).
+A follow-up unfiltered question ("cases by severity") was re-checked
+immediately after to confirm the fix didn't regress the unfiltered path.
