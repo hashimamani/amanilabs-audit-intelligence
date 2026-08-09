@@ -1048,19 +1048,40 @@ worth knowing before it hits real production traffic.
   surface the clean "AI features are not configured" message (not a raw
   error dump) via the existing `ApiError`-based error handling - zero
   frontend changes were needed for that path to work correctly.
-- **Not yet verified - needs a real `ANTHROPIC_API_KEY`**: an actual live
-  Claude call was not exercised (no key available in the environment this
-  was built in, and API keys are never something to fabricate or handle
-  directly). Whoever adds a real key next should sanity-check: ask a case
-  a few real questions and confirm every stated fact traces back to
-  visible evidence on that case; try several chart-question phrasings
-  ("cases by severity", "which rules are firing the most", "break down by
-  status") and confirm Claude picks sensible `group_by` values across
-  real natural-language variety, not just exact test wording; and rebuild
-  the Docker Compose stack with the key set via a root `.env` to confirm
-  both features work through the real nginx `/api` proxy, not just direct
-  local dev.
+- **Live-verified against the deployed pilot** (section 18's EC2 instance,
+  `34.233.59.94`): the user added a real `ANTHROPIC_API_KEY` to the
+  server's `.env` directly over SSH (never handled by the assistant -
+  API keys are never something to type into a file or command on a
+  user's behalf, even if offered). Deployed via the same `rsync` +
+  `sudo docker compose up -d --build` mechanism as section 18, after
+  updating `audit-intelligence-sg`'s SSH ingress rule to the deploying
+  machine's new IP (the old rule pointed at a different network - a
+  one-line `authorize-security-group-ingress` fix, exactly as flagged
+  as a possible future need in section 18). A disposable test tenant
+  (`ai-smoke-test`, provisioned via the normal `create_tenant.py` script
+  purely for this verification - self-generated throwaway credentials,
+  not a real account) ran a real analysis (91 cases, matching the known
+  baseline) and exercised both endpoints live:
+  - **Case Q&A**: asked a real R009 (fraud-ring) case why it was
+    flagged. Claude's answer correctly cited the actual ring size,
+    guarantee chain, fellow ring members, loan IDs, and approval window
+    from that case's real evidence - and, per the system prompt's rule
+    5, explicitly declined to render a fraud verdict ("I'll leave the
+    judgment on whether fraud occurred to you").
+  - **Analytics**: three differently-phrased questions ("cases by
+    severity", "which rules are firing the most", "break down open vs
+    closed cases") each correctly mapped to a sensible `group_by`
+    (`severity`, `rule_id`, `status` respectively - note the third
+    phrasing has no literal "open vs closed" enum value, and Claude
+    correctly picked the closest real dimension instead of failing) with
+    real, internally-consistent computed numbers (severity: 26 + 33 +
+    32 = 91, matching the run's real case count).
+  - 503-when-unset path was already verified pre-deploy (see above); this
+    pass covers the live, key-configured path the earlier one couldn't.
 - **Explicit non-goals for this pass** (fast-follows, not forgotten): Q&A
   history persistence, a real charting library (pie/line charts), a
   `filters` param on the chart tool, per-tenant rate limiting or a cost
-  guard on either endpoint.
+  guard on either endpoint. The `ai-smoke-test` tenant was left in place
+  on the live DB (no `delete_tenant` script exists, and hand-writing a
+  DELETE against production wasn't worth the risk for a harmless,
+  fully-isolated extra tenant row) - safe to ignore or remove later.
