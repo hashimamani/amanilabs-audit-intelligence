@@ -278,9 +278,14 @@ export function DashboardPage() {
             className="btn-primary flex items-center gap-2 py-1.5"
           >
             <Send className="h-4 w-4" />
-            {loadingChart ? "Asking..." : "Ask"}
+            {loadingChart ? "Analyzing..." : "Ask"}
           </button>
         </div>
+        {loadingChart && (
+          <p className="mt-2 text-xs text-slate-400">
+            Writing and running real code against your case data — this can take up to a minute.
+          </p>
+        )}
         {chartError && (
           <div className="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-800">{chartError}</div>
         )}

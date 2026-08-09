@@ -119,9 +119,13 @@ def analytics_query(
 
     system_prompt = ANALYTICS_SYSTEM_PROMPT.format(case_data=_cases_to_csv(rows))
     messages = [{"role": "user", "content": payload.question}]
+    # No adaptive thinking, medium effort: writing one pandas aggregation
+    # against a clearly-specified prompt is a bounded, mechanical task, not
+    # one that benefits from deliberate reasoning - this cuts real latency
+    # versus the default without giving up code-execution's flexibility.
     kwargs = dict(
         max_tokens=8192,
-        thinking={"type": "adaptive"},
+        output_config={"effort": "medium"},
         system=system_prompt,
         tools=[{"type": "code_execution_20260120", "name": "code_execution"}],
     )
