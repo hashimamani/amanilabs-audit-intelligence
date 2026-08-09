@@ -40,9 +40,12 @@ def get_anthropic_client() -> anthropic.Anthropic:
 
 def call_claude(client: anthropic.Anthropic, **kwargs):
     """Translates Anthropic SDK exceptions into clean HTTP errors instead of
-    letting them surface as a raw 500 traceback."""
+    letting them surface as a raw 500 traceback. Defaults to ANTHROPIC_MODEL
+    (Opus); pass model=... to override for a specific route - e.g. analytics
+    uses a faster model since chart generation is latency-sensitive."""
+    model = kwargs.pop("model", ANTHROPIC_MODEL)
     try:
-        return client.messages.create(model=ANTHROPIC_MODEL, **kwargs)
+        return client.messages.create(model=model, **kwargs)
     except anthropic.RateLimitError:
         raise HTTPException(status_code=429, detail="AI service is rate-limited, try again shortly")
     except anthropic.APIConnectionError:

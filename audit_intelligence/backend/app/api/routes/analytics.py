@@ -119,12 +119,18 @@ def analytics_query(
 
     system_prompt = ANALYTICS_SYSTEM_PROMPT.format(case_data=_cases_to_csv(rows))
     messages = [{"role": "user", "content": payload.question}]
-    # No adaptive thinking, medium effort: writing one pandas aggregation
-    # against a clearly-specified prompt is a bounded, mechanical task, not
-    # one that benefits from deliberate reasoning - this cuts real latency
-    # versus the default without giving up code-execution's flexibility.
+    # Sonnet, not the app-wide default Opus: chart generation is
+    # latency-sensitive (a live user is waiting on it), and writing one
+    # pandas aggregation from a clearly-specified prompt doesn't need
+    # Opus-level intelligence. thinking is explicitly disabled rather than
+    # omitted - Sonnet 5 defaults to adaptive thinking when thinking is
+    # omitted (unlike Opus 4.8, which defaults to no thinking), so leaving
+    # it out here would silently reintroduce the reasoning overhead this
+    # is trying to avoid.
     kwargs = dict(
+        model="claude-sonnet-5",
         max_tokens=8192,
+        thinking={"type": "disabled"},
         output_config={"effort": "medium"},
         system=system_prompt,
         tools=[{"type": "code_execution_20260120", "name": "code_execution"}],

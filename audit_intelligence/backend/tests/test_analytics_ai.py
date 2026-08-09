@@ -135,6 +135,17 @@ def test_analytics_csv_excludes_pii_and_spans_all_runs(client, default_token, mo
         assert c["subject_name"] not in system_prompt
 
 
+def test_analytics_uses_sonnet_not_the_app_wide_opus_default(client, default_token, mocked_ai):
+    resp = client.post("/analytics/query", json={"question": "cases by severity"}, headers=_headers(default_token))
+    assert resp.status_code == 200, resp.text
+    call_kwargs = mocked_ai.messages.create.call_args.kwargs
+    assert call_kwargs["model"] == "claude-sonnet-5"
+    # Sonnet 5 defaults to adaptive thinking when `thinking` is omitted
+    # (unlike Opus 4.8) - must be explicitly disabled here or switching
+    # models silently reintroduces the latency this was meant to cut.
+    assert call_kwargs["thinking"] == {"type": "disabled"}
+
+
 def test_analytics_returns_valid_chart_from_code_execution(client, default_token):
     chart = {
         "title": "Average risk score for R001 cases",
