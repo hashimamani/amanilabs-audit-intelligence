@@ -15,6 +15,7 @@ including why the earlier enum-based design was replaced.
 import csv
 import io
 import json
+import logging
 
 import anthropic
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,6 +28,8 @@ from app.core.db import get_db
 from app.db.models import CaseORM, TenantORM
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+logger = logging.getLogger(__name__)
 
 ANALYTICS_SYSTEM_PROMPT = """You are a data-analysis assistant helping a SACCO fraud auditor explore their case statistics. You have a Python code execution tool with pandas available.
 
@@ -72,10 +75,26 @@ def _extract_chart(response) -> AnalyticsQueryOut | None:
         return None
 
     parsed = None
-    candidates = [stdout.strip()]
-    lines = stdout.strip().splitlines()
+    stripped = stdout.strip()
+    lines = stripped.splitlines()
+    candidates = [stripped]
     if lines:
         candidates.append(lines[-1])
+        # The system prompt only requires the FINAL print to be pure JSON -
+        # it explicitly allows earlier exploratory prints (e.g. a df.head()
+        # sanity check) in the same execution. Neither candidate above
+        # handles that (candidate 1 breaks on any extra output, candidate 2
+        # only catches a single-line final print), nor a pretty-printed
+        # multi-line JSON print. Added after an unreproduced production 502
+        # ("AI did not return a valid chart") with no diagnostic logging at
+        # the time - this is the most plausible gap on a close read of the
+        # parsing logic, not a confirmed root cause. _debug_summary logs
+        # full stdout/stderr on any future failure so the next occurrence
+        # is actually diagnosable instead of guessed at.
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].lstrip().startswith("{"):
+                candidates.append("\n".join(lines[i:]))
+                break
     for candidate in candidates:
         if not candidate:
             continue
@@ -104,6 +123,36 @@ def _extract_chart(response) -> AnalyticsQueryOut | None:
         points.append(ChartDatapointOut(label=label, value=value))
 
     return AnalyticsQueryOut(title=title, chart_type=chart_type, data=points)
+
+
+def _debug_summary(response) -> str:
+    """Only called on the failure path (_extract_chart returned None) - the
+    502 this guards gave zero diagnostic signal in production logs, so the
+    first real occurrence couldn't be root-caused. Summarizes stop_reason
+    plus every content block (truncated) so the next occurrence is
+    debuggable without needing to reproduce it live again."""
+    parts = [f"stop_reason={response.stop_reason!r}"]
+    for block in response.content:
+        btype = getattr(block, "type", "?")
+        if btype == "bash_code_execution_tool_result":
+            result = block.content
+            rtype = getattr(result, "type", "?")
+            if rtype == "bash_code_execution_result":
+                stdout = (getattr(result, "stdout", "") or "")[:2000]
+                stderr = (getattr(result, "stderr", "") or "")[:2000]
+                parts.append(
+                    f"[{btype}] return_code={getattr(result, 'return_code', '?')} "
+                    f"stdout={stdout!r} stderr={stderr!r}"
+                )
+            else:
+                parts.append(f"[{btype}] result_type={rtype!r} content={str(result)[:1000]!r}")
+        elif btype == "text":
+            parts.append(f"[text] {getattr(block, 'text', '')[:1000]!r}")
+        elif btype == "server_tool_use":
+            parts.append(f"[server_tool_use] input={str(getattr(block, 'input', ''))[:500]!r}")
+        else:
+            parts.append(f"[{btype}] {str(block)[:500]!r}")
+    return "\n".join(parts)
 
 
 @router.post("/query", response_model=AnalyticsQueryOut)
@@ -146,5 +195,11 @@ def analytics_query(
 
     chart = _extract_chart(response)
     if chart is None:
+        logger.warning(
+            "analytics_query: AI did not return a valid chart. question=%r tenant_id=%s\n%s",
+            payload.question,
+            tenant.id,
+            _debug_summary(response),
+        )
         raise HTTPException(status_code=502, detail="AI did not return a valid chart")
     return chart

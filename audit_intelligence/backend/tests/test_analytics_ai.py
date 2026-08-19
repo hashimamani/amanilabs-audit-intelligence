@@ -158,6 +158,29 @@ def test_analytics_returns_valid_chart_from_code_execution(client, default_token
     assert resp.json() == chart
 
 
+def test_analytics_extracts_chart_after_exploratory_prints(client, default_token):
+    # The system prompt explicitly allows Claude's code to print other
+    # things before its FINAL print, as long as that final print is pure
+    # JSON - e.g. a df.head() sanity check during exploration.
+    chart = {"title": "Cases by severity", "chart_type": "bar", "data": [{"label": "Critical", "value": 5}]}
+    stdout = "  severity\n0  Critical\n1  High\n" + json.dumps(chart)
+    fake = MagicMock()
+    fake.messages.create.return_value = MagicMock(content=[_bash_result_block(stdout)], stop_reason="end_turn")
+    resp = _query_with_mock(client, default_token, fake)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == chart
+
+
+def test_analytics_extracts_pretty_printed_multiline_json(client, default_token):
+    chart = {"title": "Cases by severity", "chart_type": "bar", "data": [{"label": "Critical", "value": 5}]}
+    stdout = json.dumps(chart, indent=2)
+    fake = MagicMock()
+    fake.messages.create.return_value = MagicMock(content=[_bash_result_block(stdout)], stop_reason="end_turn")
+    resp = _query_with_mock(client, default_token, fake)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == chart
+
+
 def test_analytics_502_when_no_code_execution_block(client, default_token):
     fake = MagicMock()
     fake.messages.create.return_value = MagicMock(
