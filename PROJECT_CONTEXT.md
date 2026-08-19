@@ -1348,3 +1348,44 @@ tuning, both measured live rather than assumed:
   not built) or a more invasive architecture change (e.g. skipping code
   execution for simple, recognizable questions). Neither pursued yet -
   flagging as the next real lever if 30-40s still isn't acceptable.
+
+## 22. Fixed: nginx 504 "Gateway Timeout" on the AI endpoints (done)
+
+Real bug, reported directly by the user hitting it live: both "ask for a
+chart" and board report generation were returning "Gateway Timeout"
+instead of their real result.
+
+- **Root cause**: `audit_intelligence/frontend/nginx.conf`'s `/api/`
+  location had no explicit `proxy_read_timeout`, so nginx's default (60s)
+  applied. Section 21 documented `/analytics/query` averaging ~30-40s and
+  occasionally needing a `pause_turn` retry that roughly doubles the wait;
+  `/reports/generate` runs Opus over up to 20 batched cases at
+  `max_tokens=8192`. Both routinely exceed 60s. nginx was killing the
+  proxied connection and returning its own 504 while the FastAPI backend
+  was still genuinely working - not a backend bug, not an Anthropic-side
+  issue.
+- **Fix**: added `proxy_connect_timeout`/`proxy_send_timeout`/
+  `proxy_read_timeout 180s;` to the `/api/` location - generous margin
+  over the documented worst case, no effect on every other route (those
+  return in milliseconds regardless of this setting).
+- **Verified by reproducing the actual failure, not just reasoning about
+  it**: built the real `frontend` image from this repo's Dockerfile, ran
+  it against a stub backend container (named `backend` on a shared
+  docker network, so nginx's `proxy_pass http://backend:8000/` resolves
+  exactly like it does against the real service) that sleeps 90s before
+  responding. Pre-fix nginx.conf: confirmed a real `504 Gateway Time-out`
+  at exactly 60.0s. Post-fix nginx.conf, same stub, same 90s delay:
+  confirmed a real `200` at 90.0s. This isolates the fix to nginx
+  configuration alone, independent of what the backend/Anthropic call
+  actually does.
+- Confirmed this can only be nginx (not a Vite dev-server issue, and not
+  a client-side fetch timeout): `frontend/vite.config.ts`'s local dev
+  proxy sets no timeout of its own, and `frontend/src/api/client.ts`'s
+  `request()` uses a plain `fetch()` with no `AbortController`/timeout.
+  "Gateway Timeout" is literally nginx's 504 status text, surfaced to the
+  user via `ApiError`'s fallback to `res.statusText` when nginx's default
+  HTML error page fails to parse as JSON.
+- **Not yet deployed to the live EC2 pilot** (section 18,
+  `34.233.59.94`) as of this fix landing in the repo - that box is where
+  the user was actually hitting this, so the fix has no effect there
+  until the next `rsync` + `sudo docker compose up -d --build` deploy.
