@@ -1385,7 +1385,22 @@ instead of their real result.
   "Gateway Timeout" is literally nginx's 504 status text, surfaced to the
   user via `ApiError`'s fallback to `res.statusText` when nginx's default
   HTML error page fails to parse as JSON.
-- **Not yet deployed to the live EC2 pilot** (section 18,
-  `34.233.59.94`) as of this fix landing in the repo - that box is where
-  the user was actually hitting this, so the fix has no effect there
-  until the next `rsync` + `sudo docker compose up -d --build` deploy.
+- **Deployed and live-verified same day** on the EC2 pilot (section 18,
+  `34.233.59.94`) - that box is where the user was actually hitting this.
+  `rsync` + `sudo docker compose up -d --build`, same mechanism as every
+  prior deploy. One extra step needed first: SSH connect timed out
+  because the security group's SSH ingress rule (section 18) was still
+  scoped to a previous deploying machine's IP - updated via
+  `aws ec2 authorize/revoke-security-group-ingress` under the
+  `audit-intelligence` CLI profile, exactly the one-line fix section 18
+  already anticipated for this situation. Verified against real Claude
+  calls using a fresh disposable tenant (`nginx-fix-verify`, same
+  throwaway-tenant pattern as section 19's `ai-smoke-test`, left in place
+  under the same reasoning - no `delete_tenant` script exists and it's a
+  harmless isolated row): a real analysis run (91 cases, matching the
+  known baseline), then both previously-failing endpoints against real
+  Claude - `/analytics/query` returned a real severity breakdown (26 + 33
+  + 32 = 91) in 50.3s, `/reports/generate` returned a real 20-case,
+  ~11.7KB report in 49.0s. Both are real 200s at durations that were
+  landing right at or past the old 60s ceiling - exactly the previously-
+  failing range, now succeeding.
