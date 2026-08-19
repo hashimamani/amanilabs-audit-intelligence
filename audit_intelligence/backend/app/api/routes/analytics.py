@@ -48,6 +48,10 @@ Rules — follow these exactly:
 6. The data given has already been stripped of case references and member names/IDs — work only with the columns provided. Never invent a case reference, member name, or ID that isn't in this data.
 """
 
+CONCISE_RETRY_SUFFIX = """
+
+IMPORTANT: a previous attempt at this question ran out of output budget before finishing. This time, be maximally concise: write the minimum code needed to answer the question, do not print any exploratory or intermediate output, and make your ONLY print statement the final JSON object described above."""
+
 
 def _cases_to_csv(rows: list[CaseORM]) -> str:
     """Privacy-minimized: no case_ref, subject_id, or subject_name - charts
@@ -131,7 +135,7 @@ def _debug_summary(response) -> str:
     first real occurrence couldn't be root-caused. Summarizes stop_reason
     plus every content block (truncated) so the next occurrence is
     debuggable without needing to reproduce it live again."""
-    parts = [f"stop_reason={response.stop_reason!r}"]
+    parts = [f"stop_reason={response.stop_reason!r}", f"usage={getattr(response, 'usage', None)!r}"]
     for block in response.content:
         btype = getattr(block, "type", "?")
         if btype == "bash_code_execution_tool_result":
@@ -166,8 +170,8 @@ def analytics_query(
     if not rows:
         return AnalyticsQueryOut(title="No cases yet — run an analysis first.", chart_type="bar", data=[])
 
-    system_prompt = ANALYTICS_SYSTEM_PROMPT.format(case_data=_cases_to_csv(rows))
-    messages = [{"role": "user", "content": payload.question}]
+    base_system_prompt = ANALYTICS_SYSTEM_PROMPT.format(case_data=_cases_to_csv(rows))
+    user_message = {"role": "user", "content": payload.question}
     # Sonnet, not the app-wide default Opus: chart generation is
     # latency-sensitive (a live user is waiting on it), and writing one
     # pandas aggregation from a clearly-specified prompt doesn't need
@@ -178,12 +182,13 @@ def analytics_query(
     # is trying to avoid.
     kwargs = dict(
         model="claude-sonnet-5",
-        max_tokens=8192,
+        max_tokens=12000,
         thinking={"type": "disabled"},
         output_config={"effort": "medium"},
-        system=system_prompt,
+        system=base_system_prompt,
         tools=[{"type": "code_execution_20260120", "name": "code_execution"}],
     )
+    messages = [user_message]
     response = call_claude(client, messages=messages, **kwargs)
 
     # The server-side code-execution loop hit its iteration cap - resend to
@@ -193,6 +198,25 @@ def analytics_query(
         messages = [messages[0], {"role": "assistant", "content": response.content}]
         response = call_claude(client, messages=messages, **kwargs)
 
+    if response.stop_reason == "max_tokens":
+        # Found live in production on a compound question ("trend of
+        # Critical cases this month" - a time filter AND a severity filter
+        # AND a trend grouping): the model ran out of output budget before
+        # finishing its code, sometimes with very little visible content
+        # written yet. Unlike pause_turn, a max_tokens cutoff isn't a
+        # documented resumable state (the trailing content can end mid
+        # tool-input, not a well-formed block to replay), so retry as a
+        # FRESH call rather than trying to continue it - with an explicit
+        # instruction to be concise, since a verbose/exploratory first
+        # attempt is the most likely way a single chart question burns
+        # through 12000 output tokens.
+        retry_kwargs = {**kwargs, "system": base_system_prompt + CONCISE_RETRY_SUFFIX}
+        retry_messages = [user_message]
+        response = call_claude(client, messages=retry_messages, **retry_kwargs)
+        if response.stop_reason == "pause_turn":
+            retry_messages = [retry_messages[0], {"role": "assistant", "content": response.content}]
+            response = call_claude(client, messages=retry_messages, **retry_kwargs)
+
     chart = _extract_chart(response)
     if chart is None:
         logger.warning(
@@ -201,5 +225,10 @@ def analytics_query(
             tenant.id,
             _debug_summary(response),
         )
+        if response.stop_reason == "max_tokens":
+            raise HTTPException(
+                status_code=502,
+                detail="This question needed more analysis than fits in one response — try asking something more specific or narrower (e.g. one filter at a time).",
+            )
         raise HTTPException(status_code=502, detail="AI did not return a valid chart")
     return chart

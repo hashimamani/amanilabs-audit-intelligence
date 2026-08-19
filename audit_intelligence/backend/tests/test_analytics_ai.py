@@ -230,6 +230,35 @@ def test_analytics_resubmits_on_pause_turn(client, default_token):
     assert fake.messages.create.call_count == 2
 
 
+def test_analytics_retries_fresh_with_concise_nudge_on_max_tokens(client, default_token):
+    chart = {"title": "Cases by status", "chart_type": "bar", "data": [{"label": "Open", "value": 3}]}
+    truncated = MagicMock(
+        content=[MagicMock(type="text", text="I'll analyze..."), MagicMock(type="server_tool_use", input={})],
+        stop_reason="max_tokens",
+    )
+    retried = MagicMock(content=[_bash_result_block(json.dumps(chart))], stop_reason="end_turn")
+    fake = MagicMock()
+    fake.messages.create.side_effect = [truncated, retried]
+
+    resp = _query_with_mock(client, default_token, fake, "trend of Critical cases this month")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == chart
+    assert fake.messages.create.call_count == 2
+    retry_call = fake.messages.create.call_args_list[1]
+    assert "ran out of output budget" in retry_call.kwargs["system"]
+    assert len(retry_call.kwargs["messages"]) == 1  # fresh call, not a resumed partial turn
+
+
+def test_analytics_502_with_clear_message_when_max_tokens_persists(client, default_token):
+    truncated = MagicMock(content=[MagicMock(type="text", text="...")], stop_reason="max_tokens")
+    fake = MagicMock()
+    fake.messages.create.side_effect = [truncated, truncated]
+
+    resp = _query_with_mock(client, default_token, fake, "trend of Critical cases this month")
+    assert resp.status_code == 502
+    assert "more specific" in resp.json()["detail"]
+
+
 def test_analytics_503_when_key_unset(client, default_token, monkeypatch):
     app.dependency_overrides.pop(get_anthropic_client, None)
     monkeypatch.setattr("app.core.ai.ANTHROPIC_API_KEY", None)
