@@ -1188,7 +1188,30 @@ bar chart to real bar/line chart variety.
   20-case board report (evidence-cited per case, correctly refusing to
   render a fraud verdict) and both chart types returning `chart_type`-
   correct, numerically accurate results for varied natural-language
-  phrasings. UI rendering (bar chart with severity colors, line chart
+  phrasings.
+
+**Follow-up bug, found immediately after the timeout fix shipped**: with
+the 504 gone, a real 502 "AI did not return a valid chart" surfaced -
+distinct issue, same day. `_extract_chart` only tried the whole stdout,
+or the single last line, as a JSON candidate. The system prompt
+explicitly permits Claude's code to print other things before its FINAL
+print (e.g. an exploratory `df.head()`), and doesn't forbid pretty-
+printing that final JSON across multiple lines - neither case was
+handled by either candidate. Added a third candidate: everything from
+the last stdout line that opens a JSON object (`{`) onward. Also added
+`_debug_summary`/logging on any future extraction failure (stop_reason
+plus every content block, truncated) - there had been zero diagnostic
+trail for the original 502, which is why it took a code read rather than
+a log read to find. New tests
+(`test_analytics_extracts_chart_after_exploratory_prints`,
+`test_analytics_extracts_pretty_printed_multiline_json`) cover both
+shapes directly - full suite 51/51. Deployed and re-verified live (5
+varied questions, all real 200s with correct computed numbers) - the
+original failure was never reproduced on demand (genuinely intermittent
+by nature), so this is the most plausible root cause found on a close
+read, not a confirmed-via-logs one; the new logging is what closes that
+gap for any future occurrence. UI rendering (bar chart with severity
+colors, line chart
   with a smooth trend, the report panel's text formatting and download
   button) was visually confirmed via the local dev server with the
   actual deployed component code and a mocked API response, since the
