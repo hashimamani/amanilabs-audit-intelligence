@@ -45,7 +45,7 @@ jobs:
       # until a deploy ran with different versions than the tests did.
       - name: requirements.txt matches uv.lock
         run: |
-          uv export --frozen --no-dev --no-hashes --no-emit-project --quiet -o /tmp/requirements.txt
+          uv export --frozen --no-dev --no-hashes --no-emit-project --no-header --quiet -o /tmp/requirements.txt
           diff -u requirements.txt /tmp/requirements.txt
 
   frontend:
@@ -90,5 +90,8 @@ jobs:
 
       # No AWS credentials are configured in this job on purpose: synth of the
       # dev stage needs none, and that is also what keeps this job from reaching
-      # real AWS even by accident.
-      - run: npm run synth
+      # real AWS even by accident. `cdk synth` exits non-zero on an app with no
+      # stacks, so this waits for the first stack (phase 2) rather than
+      # swallowing real failures with `|| true`.
+      - if: hashFiles('infra/lib/stacks/**/*.ts') != ''
+        run: npm run synth

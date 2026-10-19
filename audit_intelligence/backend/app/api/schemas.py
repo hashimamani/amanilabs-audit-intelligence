@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 
 class EvidenceOut(BaseModel):
@@ -23,9 +23,7 @@ class FlagOut(BaseModel):
 
 
 class CaseSummaryOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
+    id: str
     case_ref: str
     run_id: int
     subject_type: str
@@ -40,19 +38,7 @@ class CaseSummaryOut(BaseModel):
     updated_at: datetime
 
 
-class CaseDetailOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    case_ref: str
-    run_id: int
-    subject_type: str
-    subject_id: str
-    subject_name: str
-    risk_score: float
-    severity: str
-    status: str
-    triggered_rules: list[str]
+class CaseDetailOut(CaseSummaryOut):
     flags: list[FlagOut]
     evidence: list[EvidenceOut]
     timeline: list[dict]
@@ -62,8 +48,6 @@ class CaseDetailOut(BaseModel):
     notes: list[str]
     outcome: str | None
     ai_summary: str | None
-    created_at: datetime
-    updated_at: datetime
 
 
 class CaseUpdateIn(BaseModel):
@@ -74,12 +58,20 @@ class CaseUpdateIn(BaseModel):
 
 
 class BulkCaseStatusIn(BaseModel):
-    case_ids: list[int]
+    case_ids: list[str]
     status: str
 
 
 class BulkCaseStatusOut(BaseModel):
     updated_count: int
+
+
+class ActivityOut(BaseModel):
+    at: datetime
+    actor_email: str
+    actor_name: str
+    action: str
+    detail: dict[str, Any]
 
 
 class CaseAskIn(BaseModel):
@@ -106,7 +98,7 @@ class AnalyticsQueryOut(BaseModel):
 
 
 class ReportGenerateIn(BaseModel):
-    case_ids: list[int] | None = None
+    case_ids: list[str] | None = None
 
 
 class ReportGenerateOut(BaseModel):
@@ -115,8 +107,18 @@ class ReportGenerateOut(BaseModel):
     generated_at: datetime
 
 
+class JobOut(BaseModel):
+    id: str
+    kind: Literal["analysis", "analytics", "report"]
+    status: Literal["queued", "running", "succeeded", "failed"]
+    result: dict[str, Any] | None
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
 class UserOut(BaseModel):
-    id: int
+    id: str
     email: str
     name: str
     role: str
@@ -138,8 +140,8 @@ class LoginOut(BaseModel):
 class UserCreateIn(BaseModel):
     email: str
     name: str
-    password: str
     role: Literal["auditor", "admin"]
+    password: str | None = None
 
 
 class UserUpdateIn(BaseModel):
@@ -147,20 +149,37 @@ class UserUpdateIn(BaseModel):
     is_active: bool | None = None
 
 
-class UploadOut(BaseModel):
+class UploadTargetOut(BaseModel):
+    file: str
+    url: str
+    method: str
+
+
+class DatasetCreateOut(BaseModel):
     dataset_id: str
-    files_received: list[str]
+    uploads: list[UploadTargetOut]
+
+
+class DatasetOut(BaseModel):
+    dataset_id: str
+    status: Literal["pending", "ready", "invalid"]
+    errors: list[str]
+    created_at: datetime
 
 
 class RunAnalysisIn(BaseModel):
     dataset_id: str | None = None
 
 
-class RunSummaryOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
+class RunOut(BaseModel):
     id: int
     dataset_id: str
+    status: Literal["queued", "running", "succeeded", "failed"]
+    job_id: str | None
     created_at: datetime
+    completed_at: datetime | None
     flag_count: int
     case_count: int
+    severity_counts: dict[str, int]
+    rule_counts: dict[str, int]
+    error: str | None

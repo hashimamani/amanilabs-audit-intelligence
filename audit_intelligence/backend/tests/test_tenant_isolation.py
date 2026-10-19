@@ -1,110 +1,47 @@
-"""
-Exercises cross-tenant case isolation end-to-end via FastAPI's
-TestClient, against a throwaway SQLite file so it never touches a
-developer's real audit_intelligence.db. DATABASE_URL must be pointed at
-that throwaway file BEFORE anything imports app.core.db (transitively
-imported by app.main and everything under app.api), since the engine
-binds to DATABASE_URL at import time.
-
-Auth is now individual login (see test_auth.py for the auth mechanics
-themselves) rather than a shared per-tenant key, but the isolation
-guarantee this file checks - one tenant can never see another's cases -
-is unchanged.
-"""
-
-import os
-import sys
-import tempfile
-from pathlib import Path
-
-BACKEND_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(BACKEND_DIR))
-
-_fd, _TEST_DB_PATH = tempfile.mkstemp(suffix=".db")
-os.close(_fd)
-os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB_PATH}"
-
-import pytest
-from fastapi.testclient import TestClient
-
-from app.main import app
-from app.core.auth import DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_DEV_PASSWORD
-from app.scripts.create_tenant import create_tenant
+"""One tenant can never see another's runs or cases."""
 
 
-@pytest.fixture(scope="module")
-def client():
-    with TestClient(app) as c:
-        yield c
+def test_no_token_or_unknown_token_is_rejected(client, headers):
+    assert client.get("/cases").status_code == 401
+    assert client.get("/cases", headers=headers("not-a-real-token")).status_code == 401
 
 
-def _headers(token):
-    return {"Authorization": f"Bearer {token}"}
-
-
-def _login(client, email, password):
-    resp = client.post("/auth/login", json={"email": email, "password": password})
-    assert resp.status_code == 200, resp.text
-    return resp.json()["access_token"]
-
-
-@pytest.fixture(scope="module")
-def default_token(client):
-    return _login(client, DEFAULT_ADMIN_EMAIL, DEFAULT_ADMIN_DEV_PASSWORD)
-
-
-@pytest.fixture(scope="module")
-def tenant_a_token(client):
-    admin, password = create_tenant("tenant-a", "Tenant A SACCO", "admin-a@example.com", "Admin A")
-    return _login(client, admin.email, password)
-
-
-@pytest.fixture(scope="module")
-def tenant_b_token(client):
-    admin, password = create_tenant("tenant-b", "Tenant B SACCO", "admin-b@example.com", "Admin B")
-    return _login(client, admin.email, password)
-
-
-def test_no_token_is_rejected(client):
-    resp = client.get("/cases")
-    assert resp.status_code == 401
-
-
-def test_unknown_token_is_rejected(client):
-    resp = client.get("/cases", headers=_headers("not-a-real-token"))
-    assert resp.status_code == 401
-
-
-def test_default_tenant_works_end_to_end(client, default_token):
-    resp = client.post("/analysis/run", json={}, headers=_headers(default_token))
-    assert resp.status_code == 200
-    body = resp.json()
+def test_default_tenant_works_end_to_end(client, default_token, headers, run_demo_analysis):
+    body = run_demo_analysis()
     assert body["case_count"] > 0
+    assert body["flag_count"] > body["case_count"] // 2
+    assert sum(body["severity_counts"].values()) == body["case_count"]
+    assert body["rule_counts"]["R001"] >= 10
 
-    resp = client.get("/cases", headers=_headers(default_token))
+    resp = client.get("/cases", headers=headers(default_token))
     assert resp.status_code == 200
     assert len(resp.json()) > 0
 
 
-def test_tenants_cannot_see_each_others_cases(client, tenant_a_token, tenant_b_token):
-    run_a = client.post("/analysis/run", json={}, headers=_headers(tenant_a_token))
-    assert run_a.status_code == 200
+def test_tenants_cannot_see_each_others_cases(client, headers, provision_tenant, run_demo_analysis):
+    token_a = provision_tenant("tenant-a", "Tenant A SACCO")
+    token_b = provision_tenant("tenant-b", "Tenant B SACCO")
+    run_demo_analysis(token_a)
 
-    cases_b = client.get("/cases", headers=_headers(tenant_b_token))
-    assert cases_b.status_code == 200
-    assert cases_b.json() == []
+    assert client.get("/cases", headers=headers(token_b)).json() == []
+    assert client.get("/analysis/runs", headers=headers(token_b)).json() == []
+    cases_a = client.get("/cases", headers=headers(token_a)).json()
+    assert len(cases_a) > 0
 
-    cases_a = client.get("/cases", headers=_headers(tenant_a_token))
-    assert cases_a.status_code == 200
-    assert len(cases_a.json()) > 0
-
-
-def test_fetching_another_tenants_case_by_id_is_a_404(client, tenant_a_token, tenant_b_token):
-    cases_a = client.get("/cases", headers=_headers(tenant_a_token)).json()
     case_id = cases_a[0]["id"]
+    assert client.get(f"/cases/{case_id}", headers=headers(token_b)).status_code == 404
+    assert client.get(f"/cases/{case_id}", headers=headers(token_a)).status_code == 200
+    assert client.get(f"/cases/{case_id}/activity", headers=headers(token_b)).status_code == 404
 
-    resp = client.get(f"/cases/{case_id}", headers=_headers(tenant_b_token))
-    assert resp.status_code == 404
+    run_id = cases_a[0]["run_id"]
+    assert client.get(f"/analysis/runs/{run_id}", headers=headers(token_b)).status_code == 404
+    assert client.get(f"/cases?run_id={run_id}", headers=headers(token_b)).json() == []
 
-    resp = client.get(f"/cases/{case_id}", headers=_headers(tenant_a_token))
-    assert resp.status_code == 200
+
+def test_run_numbers_are_per_tenant(client, headers, provision_tenant, run_demo_analysis):
+    token = provision_tenant("tenant-c", "Tenant C SACCO")
+    first = run_demo_analysis(token)
+    second = run_demo_analysis(token)
+    assert (first["id"], second["id"]) == (1, 2)
+    cases = client.get("/cases", headers=headers(token)).json()
+    assert cases[0]["id"].startswith("CASE-0002-")

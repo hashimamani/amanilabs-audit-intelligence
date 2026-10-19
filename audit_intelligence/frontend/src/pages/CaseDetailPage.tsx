@@ -15,7 +15,7 @@ function formatTimestamp(ts: string | null): string {
 
 export function CaseDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const caseId = Number(id);
+  const caseId = id ?? "";
 
   const [caseData, setCaseData] = useState<CaseDetail | null>(null);
   const [loading, setLoading] = useState(true);

@@ -1581,8 +1581,109 @@ are pure pandas/dicts. Idle cost well under $5/month vs ~$20 now.
   versions inside the container; infra typecheck + 15 tests + synth clean.
   CI itself has not run yet - it fires on the first push of this work.
 
+### Phase 1 - backend decoupled from the box (done 2026-10-19)
+
+SQLAlchemy, Postgres and SQLite are gone. Nothing in the backend assumes a
+local disk, a long-lived process or a password it checks itself. The rule
+engine, case builder and the AI grounding prompts did not change.
+
+- **`app/core/settings.py`** reads every environment-dependent value once.
+  Three shapes: `local` (laptop / compose: DynamoDB Local, local auth,
+  disk datasets, inline jobs), `test` (same, under moto) and dev/prod
+  (the real table, Cognito, S3, SQS). `is_local` covers local and test.
+- **`app/db/table.py` + `app/db/repository.py`**: one DynamoDB table,
+  `PK=TENANT#<slug>` for every item so a route cannot read across tenants
+  without building a different key on purpose; `SK` prefixes META / USER# /
+  RUN#<run_no> / CASE#<case_ref> / ACTIVITY#<case_ref>#<ts> / JOB# /
+  DATASET#. `GSI1` serves "cases of a run, highest risk first"
+  (`RISK#<score*10>#<inverted seq>`, queried descending, projecting only
+  the summary fields so a list never reads the flag/evidence blobs) and
+  "user by email" for local login. Run numbers are a per-tenant atomic
+  counter on the tenant item, so `case_ref = CASE-<run>-<seq>` stays
+  readable and `run_id` stays an integer in the API. **Case ids in the API
+  are now the `case_ref` string** (`/cases/CASE-0001-0003`), not a
+  database integer. Floats are stored as `Decimal` and converted back on
+  read (`_to_dynamo`/`_from_dynamo`), which the repository test pins.
+- **Background jobs** (`app/jobs/`): `/analysis/run`, `/analytics/query`
+  and `/reports/generate` all return **202 with a job record** (analysis
+  also returns the run, which carries `status`/`job_id`); the client polls
+  `GET /jobs/{id}` or `GET /analysis/runs/{id}`. `JOB_RUNNER=inline`
+  executes in-process (local, tests); `sqs` sends `{tenant_slug, job_id}`
+  to the queue and `app/worker_handler.py` (SQS Lambda, partial-batch
+  responses) runs it. `execute_job` is idempotent on redelivery (finished
+  jobs are skipped, `running` ones retried after a crash); a `JobFailed`
+  carries a message safe to show, anything else becomes a generic error
+  with the traceback in the log. Analysis runs now also store
+  `severity_counts` and `rule_counts` at completion, and `latest_run`
+  only ever returns a succeeded run - a failed run can never become "the
+  latest" the dashboard reads. Case Q&A stays synchronous (seconds, not
+  a minute). **This is what makes the nginx-504 class of bug impossible
+  rather than tuned around.**
+- **Auth** (`app/core/auth.py`): in dev/prod the bearer is the **Cognito
+  ID token** (the only token that carries `custom:tenant`; same choice as
+  Tender Tracker), verified against the pool's JWKS with
+  `audience=client id`, `issuer=pool`, `token_use == "id"`; role is the
+  `cognito:groups` entry that is `admin` or `auditor`. Local mode mints
+  HS256 tokens with the identical claim names (`core/security.py`) so
+  everything after `decode_token` is one code path. The user's mirror
+  item in the table is read on every request: deactivation is immediate
+  and a role change needs no new token. `POST /auth/login` only exists in
+  local mode (404 otherwise). `test_auth_cognito.py` signs real RS256
+  tokens with a generated key and swaps the JWKS client.
+- **User directory** (`app/core/users.py`): Cognito mode calls
+  AdminCreateUser (Cognito emails the temporary password - no password
+  ever passes through this code), puts the user in the role group, and
+  mirrors `{user_id = sub, email, name, role, is_active}` into the table
+  (Cognito cannot list users by a custom attribute); role changes move
+  groups, deactivation disables the user and signs them out globally.
+  Local mode keeps the bcrypt hash on the item. `test_users_cognito.py`
+  runs the Cognito path against moto's cognito-idp.
+- **Datasets** (`app/core/datasets.py`, `/datasets`): uploads never pass
+  through the API. `POST /datasets` returns one URL per required file - a
+  presigned S3 PUT in dev/prod, or the API's own `PUT
+  /datasets/{id}/files/{name}?tenant&expires&token` (HMAC) locally, so
+  the browser code is identical - then `POST /datasets/{id}/finalize`
+  reads each file's header (a 64 KB ranged GET on S3) and refuses the
+  dataset with a per-file list of missing columns *before* any analysis
+  is queued. `REQUIRED_COLUMNS` is the documented export contract. The
+  worker downloads S3 datasets to a temp dir and deletes it afterwards.
+  The old multipart `POST /upload` is gone (Lambda's 6 MB request cap
+  would have made it fail on the first real SACCO export).
+- **Activity trail**: every status/assignee/outcome/note change on a case
+  writes an `ACTIVITY#` item (actor, action, from/to); `GET
+  /cases/{ref}/activity` returns it newest first. Bulk status changes are
+  marked `bulk: true`. The UI does not show it yet - Phase 3.
+- **Logging**: `aws-lambda-powertools` `Logger` (JSON lines, works outside
+  Lambda too); jobs log start/success/failure with ids. `app/
+  lambda_handler.py` (Mangum) and `app/worker_handler.py` are the two
+  Lambda entrypoints; the Docker image proves both import.
+- **Frontend**: minimal adaptation so the app keeps working end to end -
+  string case ids, `runAnalysis`/`queryAnalytics`/`generateReport` poll
+  their job inside `client.ts` (pages unchanged), `uploadDataset` PUTs
+  files to the returned URLs and shows finalize errors. The real UI
+  rebuild is Phase 3.
+- **docker-compose**: Postgres replaced by `amazon/dynamodb-local`
+  (shared db on a volume); backend on host port 8001 (8000 is DynamoDB
+  Local's). `JWT_SECRET` is gone from compose and `.env.example`.
+- **Verified**: 78 tests (`uv run pytest`) - every API test on moto
+  DynamoDB with a session-scoped table, plus moto S3 for the presigned
+  path, moto SQS + the worker handler for the queue path, moto
+  cognito-idp for the directory; ruff clean; backend image rebuilt and
+  both Lambda entrypoints imported inside it; the real app run locally
+  against DynamoDB Local (the instance already on :8000) - login, a demo
+  analysis (101 flags / 91 cases, the known baseline, 7 s), dashboard,
+  case list, a status change from the case page and its activity entry
+  read back over the API, the clean 503 on analytics without a key.
+- **Deliberately not done here**: anthropic 1.x upgrade (read the Claude
+  API reference skill first), cursor pagination (`limit`/`offset` over
+  the summary index is fine at hundreds of cases per run), per-tenant AI
+  budget (Phase 4).
+
 ### What the next session should do
 
-Phase 1, starting with the DynamoDB data layer and the async job model.
-Before touching `app/core/ai.py` for the anthropic 1.x upgrade, read the
-Claude API reference skill - the SDK's 1.x line changed client surface.
+Phase 2: the CDK stacks (Data: table with the keys in `db/table.py`,
+datasets bucket, KMS; Auth: Cognito pool with `custom:tenant`, groups
+`admin`/`auditor`, no self sign-up; Api: HTTP API + JWT authorizer +
+Mangum Lambda + SQS + worker Lambda + DLQ; Web: S3 + CloudFront with
+`/api/*`; Ops: alarms, dashboard), cdk-nag clean, assertion tests, then
+the user runs the bootstrap and CI deploys dev.

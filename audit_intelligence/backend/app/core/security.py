@@ -1,24 +1,20 @@
 """
-Password hashing (bcrypt) and stateless access tokens (JWT) for the
-Login/RBAC layer. JWT_SECRET must be overridden via env var before any
-real deployment - the default here is a labeled, insecure dev value, same
-pattern as DATABASE_URL in core/db.py and the CORS comment in main.py.
+Password hashing for local auth mode, and the local token format.
 
-Tokens carry only {sub: user_id, exp} - no role/tenant baked in - so
-get_current_user (core/auth.py) always does a fresh DB lookup. That's
-what makes deactivating a user take effect immediately rather than
-waiting for their existing token to expire.
+In local mode this app plays the part Cognito plays in dev/prod: it checks
+a password and mints a token whose claims have the same names Cognito's ID
+token uses (sub, email, name, cognito:groups, custom:tenant), so everything
+downstream of get_current_user is identical in both modes.
 """
 
-import os
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
 import jwt
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev-insecure-secret-change-before-any-real-deploy")
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRY_HOURS = 24
+from app.core.settings import get_settings
+
+LOCAL_TOKEN_HOURS = 24
 
 
 def hash_password(password: str) -> str:
@@ -29,17 +25,17 @@ def verify_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode(), password_hash.encode())
 
 
-def create_access_token(user_id: int) -> str:
-    payload = {
-        "sub": str(user_id),
-        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS),
+def create_local_token(user: dict) -> str:
+    now = datetime.now(timezone.utc)
+    claims = {
+        "sub": user["user_id"],
+        "email": user["email"],
+        "name": user["name"],
+        "cognito:groups": [user["role"]],
+        "custom:tenant": user["tenant_slug"],
+        "token_use": "id",
+        "iss": "local",
+        "iat": now,
+        "exp": now + timedelta(hours=LOCAL_TOKEN_HOURS),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-
-def decode_access_token(token: str) -> int | None:
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return int(payload["sub"])
-    except jwt.PyJWTError:
-        return None
+    return jwt.encode(claims, get_settings().local_jwt_secret, algorithm="HS256")

@@ -15,15 +15,14 @@ re-opening a connection per request - the same long-lived-resource shape as
 core/db.py's engine/SessionLocal.
 """
 
-import os
 from functools import lru_cache
 
 import anthropic
 from fastapi import HTTPException
 
-from app.db.models import CaseORM
+from app.core.settings import get_settings
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+ANTHROPIC_API_KEY = get_settings().anthropic_api_key
 ANTHROPIC_MODEL = "claude-opus-4-8"
 
 
@@ -32,10 +31,19 @@ def _build_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
-def get_anthropic_client() -> anthropic.Anthropic:
+def _default_provider() -> anthropic.Anthropic:
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="AI features are not configured")
     return _build_client()
+
+
+# Routes depend on get_anthropic_client and background jobs call it directly;
+# tests swap this one provider so both paths see the same fake.
+_client_provider = _default_provider
+
+
+def get_anthropic_client() -> anthropic.Anthropic:
+    return _client_provider()
 
 
 def call_claude(client: anthropic.Anthropic, **kwargs):
@@ -54,24 +62,24 @@ def call_claude(client: anthropic.Anthropic, **kwargs):
         raise HTTPException(status_code=502, detail=f"AI service error: {e.message}")
 
 
-def case_to_grounding_text(row: CaseORM) -> str:
+def case_to_grounding_text(row: dict) -> str:
     """Renders a case's evidence/flags/timeline/notes as verbatim, structured
     text for a system prompt - the same real data GET /cases/{id} returns,
     nothing new computed. Shared by case Q&A (one case) and the board report
     generator (many cases batched together)."""
     lines = [
-        f"Case: {row.case_ref}",
-        f"Subject: {row.subject_type} {row.subject_name} ({row.subject_id})",
-        f"Severity: {row.severity}  Risk score: {row.risk_score}  Status: {row.status}",
-        f"Triggered rules: {', '.join(row.triggered_rules) or 'none'}",
+        f"Case: {row['case_ref']}",
+        f"Subject: {row['subject_type']} {row['subject_name']} ({row['subject_id']})",
+        f"Severity: {row['severity']}  Risk score: {row['risk_score']}  Status: {row['status']}",
+        f"Triggered rules: {', '.join(row['triggered_rules']) or 'none'}",
         "",
         "Evidence:",
     ]
-    for e in row.evidence:
+    for e in row['evidence']:
         lines.append(f"- {e['label']}: {e['value']}")
 
     lines += ["", "Flags:"]
-    for f in row.flags:
+    for f in row['flags']:
         lines.append(f"- [{f['rule_id']}] {f['rule_name']} ({f['severity']}): {f['explanation']}")
         for e in f.get("evidence", []):
             lines.append(f"    evidence: {e['label']}: {e['value']}")
@@ -79,14 +87,14 @@ def case_to_grounding_text(row: CaseORM) -> str:
             lines.append(f"    suggested steps: {'; '.join(f['suggested_steps'])}")
 
     lines += ["", "Timeline:"]
-    for t in row.timeline:
+    for t in row['timeline']:
         lines.append(f"- {t.get('timestamp', 'undated')}: {t.get('rule_name', '')} — {t.get('explanation', '')}")
 
     lines += ["", "Related entities:"]
-    for k, v in row.related_entities.items():
+    for k, v in row['related_entities'].items():
         lines.append(f"- {k}: {', '.join(v)}")
 
     lines.append("")
-    lines.append(f"Recommended actions: {'; '.join(row.recommended_actions) or 'none'}")
-    lines.append(f"Auditor notes: {'; '.join(row.notes) or 'none'}")
+    lines.append(f"Recommended actions: {'; '.join(row['recommended_actions']) or 'none'}")
+    lines.append(f"Auditor notes: {'; '.join(row.get('notes') or []) or 'none'}")
     return "\n".join(lines)

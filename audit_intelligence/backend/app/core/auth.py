@@ -1,23 +1,31 @@
 """
-Individual login (email + password, JWT bearer token) replaces the old
-shared X-Tenant-Key model entirely - a user belongs to exactly one
-tenant, so logging in determines both identity and tenant. No RBAC
-role/tenant is baked into the token itself; get_current_user always
-re-reads the user row (see core/security.py's docstring for why).
+Who is asking, and for which tenant.
 
-DEFAULT_TENANT_DEV_KEY (docker-compose.yml, .env.example) no longer
-exists - DEFAULT_ADMIN_DEV_PASSWORD is its replacement, same reasoning:
-a stable, non-secret credential that only ever protects the bundled
-synthetic demo data, so local dev / `docker compose up` stay
-zero-friction without needing any manual account setup.
+Dev/prod: the bearer is a Cognito ID token (the frontend sends the ID
+token, as Tender Tracker does, because only the ID token carries the
+custom tenant attribute). API Gateway's JWT authorizer has already
+rejected anything unsigned by the pool, and this verifies again against
+the pool's JWKS so the app behaves identically when run outside the
+gateway. Role comes from `cognito:groups`; tenant from `custom:tenant`.
+
+Local: the same claim names, signed HS256 by this app (core/security.py).
+
+Either way the user's mirror item in the table is consulted so that an
+admin deactivating a user takes effect on the next request, not when the
+token expires.
 """
 
-from fastapi import Depends, Header, HTTPException
-from sqlalchemy.orm import Session
+from dataclasses import dataclass
+from functools import lru_cache
 
-from app.core.db import get_db
-from app.core.security import decode_access_token, hash_password
-from app.db.models import TenantORM, UserORM
+import jwt
+from fastapi import Depends, Header, HTTPException
+
+from app.core.settings import get_settings
+from app.db import repository as repo
+from app.db.repository import Tenant
+
+ROLES = ("admin", "auditor")
 
 DEFAULT_TENANT_SLUG = "default"
 DEFAULT_TENANT_NAME = "Default / Demo"
@@ -26,46 +34,82 @@ DEFAULT_ADMIN_NAME = "Default Admin"
 DEFAULT_ADMIN_DEV_PASSWORD = "local-dev-admin"
 
 
-def ensure_default_tenant_and_admin(db: Session) -> None:
-    tenant = db.query(TenantORM).filter(TenantORM.slug == DEFAULT_TENANT_SLUG).first()
-    if tenant is None:
-        tenant = TenantORM(slug=DEFAULT_TENANT_SLUG, name=DEFAULT_TENANT_NAME)
-        db.add(tenant)
-        db.flush()
-
-    admin = db.query(UserORM).filter(UserORM.email == DEFAULT_ADMIN_EMAIL).first()
-    if admin is None:
-        admin = UserORM(
-            tenant_id=tenant.id,
-            email=DEFAULT_ADMIN_EMAIL,
-            password_hash=hash_password(DEFAULT_ADMIN_DEV_PASSWORD),
-            name=DEFAULT_ADMIN_NAME,
-            role="admin",
-        )
-        db.add(admin)
-
-    db.commit()
+@dataclass(frozen=True)
+class Principal:
+    user_id: str
+    email: str
+    name: str
+    tenant_slug: str
+    role: str
 
 
-def get_current_user(
-    authorization: str | None = Header(None),
-    db: Session = Depends(get_db),
-) -> UserORM:
-    user = None
+@lru_cache(maxsize=1)
+def _jwks_client() -> jwt.PyJWKClient:
+    settings = get_settings()
+    url = f"https://cognito-idp.{settings.aws_region}.amazonaws.com/{settings.cognito_user_pool_id}/.well-known/jwks.json"
+    return jwt.PyJWKClient(url, cache_keys=True)
+
+
+def decode_token(token: str) -> dict | None:
+    settings = get_settings()
+    try:
+        if settings.auth_mode == "cognito":
+            signing_key = _jwks_client().get_signing_key_from_jwt(token)
+            issuer = f"https://cognito-idp.{settings.aws_region}.amazonaws.com/{settings.cognito_user_pool_id}"
+            claims = jwt.decode(
+                token, signing_key.key, algorithms=["RS256"], audience=settings.cognito_client_id, issuer=issuer,
+            )
+        else:
+            claims = jwt.decode(token, settings.local_jwt_secret, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        return None
+    if claims.get("token_use") != "id":
+        return None
+    return claims
+
+
+def principal_from_claims(claims: dict) -> Principal | None:
+    groups = claims.get("cognito:groups") or []
+    if isinstance(groups, str):
+        groups = [g for g in groups.strip("[]").split(" ") if g]
+    role = next((g for g in groups if g in ROLES), None)
+    tenant_slug = claims.get("custom:tenant")
+    if role is None or not tenant_slug or not claims.get("sub"):
+        return None
+    return Principal(
+        user_id=claims["sub"],
+        email=claims.get("email", ""),
+        name=claims.get("name") or claims.get("email", ""),
+        tenant_slug=tenant_slug,
+        role=role,
+    )
+
+
+def get_current_user(authorization: str | None = Header(None)) -> Principal:
+    principal = None
     if authorization and authorization.startswith("Bearer "):
-        user_id = decode_access_token(authorization.removeprefix("Bearer "))
-        if user_id is not None:
-            user = db.get(UserORM, user_id)
-    if user is None or not user.is_active:
+        claims = decode_token(authorization.removeprefix("Bearer ").strip())
+        if claims is not None:
+            principal = principal_from_claims(claims)
+    if principal is None:
         raise HTTPException(status_code=401, detail="Invalid or missing credentials")
-    return user
+    mirror = repo.get_user(principal.tenant_slug, principal.user_id)
+    if mirror is not None and not mirror.get("is_active", True):
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+    if mirror is not None and mirror.get("role") in ROLES and mirror["role"] != principal.role:
+        # An admin changed the role since the token was issued; the table wins.
+        principal = Principal(**{**principal.__dict__, "role": mirror["role"]})
+    return principal
 
 
-def get_current_tenant(user: UserORM = Depends(get_current_user)) -> TenantORM:
-    return user.tenant
+def get_current_tenant(user: Principal = Depends(get_current_user)) -> Tenant:
+    tenant = repo.get_tenant(user.tenant_slug)
+    if tenant is None:
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
+    return tenant
 
 
-def require_admin(user: UserORM = Depends(get_current_user)) -> UserORM:
+def require_admin(user: Principal = Depends(get_current_user)) -> Principal:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin role required")
     return user

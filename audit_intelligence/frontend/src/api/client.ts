@@ -1,9 +1,12 @@
 import type {
+  ActivityEntry,
   AnalyticsQueryResult,
   AskCaseResult,
   CaseDetail,
   CaseSummary,
   CaseUpdate,
+  DatasetCreateResult,
+  Job,
   ReportResult,
   Role,
   RunSummary,
@@ -51,23 +54,62 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-export function uploadDataset(files: File[]): Promise<UploadResult> {
-  const form = new FormData();
-  for (const file of files) {
-    form.append("files", file, file.name);
-  }
-  return request("/upload", { method: "POST", body: form });
+const POLL_INTERVAL_MS = 1500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function runAnalysis(datasetId?: string): Promise<RunSummary> {
-  return request("/analysis/run", {
+// Files go straight to the URL the API hands out (a presigned S3 PUT when
+// deployed, the API's own file route locally) - never through a JSON body.
+export async function uploadDataset(files: File[]): Promise<UploadResult> {
+  const created = await request<DatasetCreateResult>("/datasets", { method: "POST" });
+  for (const target of created.uploads) {
+    const file = files.find((f) => f.name === target.file);
+    if (!file) throw new ApiError(400, `Missing ${target.file}`);
+    const url = target.url.startsWith("/") ? `${BASE_URL}${target.url}` : target.url;
+    const res = await fetch(url, { method: target.method, body: file, headers: { "Content-Type": "text/csv" } });
+    if (!res.ok) throw new ApiError(res.status, `Upload of ${target.file} failed (${res.status})`);
+  }
+  return request(`/datasets/${created.dataset_id}/finalize`, { method: "POST" });
+}
+
+export function getRun(id: number): Promise<RunSummary> {
+  return request(`/analysis/runs/${id}`);
+}
+
+// Resolves once the run has finished; the engine runs in the background.
+export async function runAnalysis(datasetId?: string): Promise<RunSummary> {
+  let run = await request<RunSummary>("/analysis/run", {
     method: "POST",
     body: JSON.stringify({ dataset_id: datasetId ?? null }),
   });
+  while (run.status === "queued" || run.status === "running") {
+    await sleep(POLL_INTERVAL_MS);
+    run = await getRun(run.id);
+  }
+  if (run.status === "failed") throw new ApiError(500, run.error ?? "Analysis failed.");
+  return run;
 }
 
 export function listRuns(): Promise<RunSummary[]> {
   return request("/analysis/runs");
+}
+
+export function getJob<T>(id: string): Promise<Job<T>> {
+  return request(`/jobs/${id}`);
+}
+
+async function awaitJob<T>(initial: Job<T>): Promise<T> {
+  let job = initial;
+  while (job.status === "queued" || job.status === "running") {
+    await sleep(POLL_INTERVAL_MS);
+    job = await getJob<T>(job.id);
+  }
+  if (job.status === "failed" || job.result === null) {
+    throw new ApiError(502, job.error ?? "The job failed.");
+  }
+  return job.result;
 }
 
 export interface ListCasesParams {
@@ -90,11 +132,11 @@ export function listCases(params: ListCasesParams = {}): Promise<CaseSummary[]> 
   return request(`/cases?${query.toString()}`);
 }
 
-export function getCase(id: number): Promise<CaseDetail> {
+export function getCase(id: string): Promise<CaseDetail> {
   return request(`/cases/${id}`);
 }
 
-export function updateCase(id: number, payload: CaseUpdate): Promise<CaseDetail> {
+export function updateCase(id: string, payload: CaseUpdate): Promise<CaseDetail> {
   return request(`/cases/${id}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
@@ -105,8 +147,12 @@ export interface BulkStatusResult {
   updated_count: number;
 }
 
+export function getCaseActivity(id: string): Promise<ActivityEntry[]> {
+  return request(`/cases/${id}/activity`);
+}
+
 export function bulkUpdateCaseStatus(
-  caseIds: number[],
+  caseIds: string[],
   status: string,
 ): Promise<BulkStatusResult> {
   return request("/cases/bulk-status", {
@@ -115,25 +161,27 @@ export function bulkUpdateCaseStatus(
   });
 }
 
-export function askCaseQuestion(caseId: number, question: string): Promise<AskCaseResult> {
+export function askCaseQuestion(caseId: string, question: string): Promise<AskCaseResult> {
   return request(`/cases/${caseId}/ask`, {
     method: "POST",
     body: JSON.stringify({ question }),
   });
 }
 
-export function queryAnalytics(question: string): Promise<AnalyticsQueryResult> {
-  return request("/analytics/query", {
+export async function queryAnalytics(question: string): Promise<AnalyticsQueryResult> {
+  const job = await request<Job<AnalyticsQueryResult>>("/analytics/query", {
     method: "POST",
     body: JSON.stringify({ question }),
   });
+  return awaitJob(job);
 }
 
-export function generateReport(caseIds?: number[]): Promise<ReportResult> {
-  return request("/reports/generate", {
+export async function generateReport(caseIds?: string[]): Promise<ReportResult> {
+  const job = await request<Job<ReportResult>>("/reports/generate", {
     method: "POST",
     body: JSON.stringify({ case_ids: caseIds ?? null }),
   });
+  return awaitJob(job);
 }
 
 export interface LoginResult {
@@ -159,7 +207,7 @@ export function listUsers(): Promise<UserInfo[]> {
 export interface UserCreate {
   email: string;
   name: string;
-  password: string;
+  password?: string;
   role: Role;
 }
 
@@ -175,7 +223,7 @@ export interface UserUpdate {
   is_active?: boolean;
 }
 
-export function updateUser(id: number, payload: UserUpdate): Promise<UserInfo> {
+export function updateUser(id: string, payload: UserUpdate): Promise<UserInfo> {
   return request(`/users/${id}`, {
     method: "PATCH",
     body: JSON.stringify(payload),

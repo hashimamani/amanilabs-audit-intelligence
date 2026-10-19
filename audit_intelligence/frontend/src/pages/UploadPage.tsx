@@ -122,7 +122,18 @@ export function UploadPage() {
           {uploading ? "Uploading..." : "Upload dataset"}
         </button>
 
-        {uploadResult && (
+        {uploadResult && uploadResult.status !== "ready" && (
+          <div className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
+            <p className="font-medium">The upload can't be analysed yet:</p>
+            <ul className="mt-1 list-disc pl-5">
+              {uploadResult.errors.map((e) => (
+                <li key={e}>{e}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {uploadResult && uploadResult.status === "ready" && (
           <div className="mt-4 flex items-center gap-3 rounded-md bg-emerald-50 p-3 text-sm text-emerald-800">
             Uploaded (dataset {uploadResult.dataset_id}).
             <button

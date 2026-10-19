@@ -1,58 +1,34 @@
 """
 Provisions a new tenant (SACCO) and its first admin user. Run from
-backend/ as:
+backend/ with the target environment's variables set:
 
     python -m app.scripts.create_tenant --slug demo-sacco --name "Demo SACCO" \\
         --admin-email admin@demo-sacco.example --admin-name "Jane Doe"
 
-Prints the generated admin password once - it is not stored anywhere else
-and cannot be recovered, only reset by an admin through the /users UI (or
-by deleting and recreating this account). This is deliberately a CLI, not
-an admin UI: fine for provisioning a handful of pilot tenants by hand.
-Every subsequent user for that tenant is created by this admin through
-the app itself, not this script.
+Cognito mode: Cognito emails the admin a temporary password. Local mode:
+the generated password is printed once. Every subsequent user for the
+tenant is created by that admin through /users in the app.
 """
 
 import argparse
-import secrets
 import sys
 
-from app.core.db import SessionLocal
-from app.core.security import hash_password
-from app.db.models import TenantORM, UserORM
+from app.core import users
+from app.core.settings import get_settings
+from app.db import repository as repo
 
 
-def create_tenant(slug: str, name: str, admin_email: str, admin_name: str) -> tuple[UserORM, str]:
-    db = SessionLocal()
+def create_tenant(slug: str, name: str, admin_email: str, admin_name: str) -> tuple[dict, str | None]:
     try:
-        existing_tenant = db.query(TenantORM).filter(TenantORM.slug == slug).first()
-        if existing_tenant is not None:
-            print(f"Tenant slug '{slug}' already exists (id={existing_tenant.id}).", file=sys.stderr)
-            sys.exit(1)
-
-        existing_user = db.query(UserORM).filter(UserORM.email == admin_email.lower()).first()
-        if existing_user is not None:
-            print(f"Email '{admin_email}' is already in use.", file=sys.stderr)
-            sys.exit(1)
-
-        tenant = TenantORM(slug=slug, name=name)
-        db.add(tenant)
-        db.flush()
-
-        password = secrets.token_urlsafe(16)
-        admin = UserORM(
-            tenant_id=tenant.id,
-            email=admin_email.lower(),
-            password_hash=hash_password(password),
-            name=admin_name,
-            role="admin",
-        )
-        db.add(admin)
-        db.commit()
-        db.refresh(admin)
-        return admin, password
-    finally:
-        db.close()
+        repo.create_tenant(slug, name)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+    try:
+        return users.create_user(slug, email=admin_email, name=admin_name, role="admin")
+    except users.EmailInUse:
+        print(f"Email '{admin_email}' is already in use.", file=sys.stderr)
+        sys.exit(1)
 
 
 def main():
@@ -64,8 +40,11 @@ def main():
     args = parser.parse_args()
 
     admin, password = create_tenant(args.slug, args.name, args.admin_email, args.admin_name)
-    print(f"Created tenant '{args.name}' (slug={args.slug}) with admin '{admin.email}'.")
-    print(f"Password (store this now, it will not be shown again):\n{password}")
+    print(f"Created tenant '{args.name}' (slug={args.slug}) with admin '{admin['email']}'.")
+    if password:
+        print(f"Password (store this now, it will not be shown again):\n{password}")
+    elif get_settings().auth_mode == "cognito":
+        print("Cognito has emailed the admin a temporary password.")
 
 
 if __name__ == "__main__":

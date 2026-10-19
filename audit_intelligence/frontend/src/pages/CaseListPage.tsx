@@ -16,7 +16,7 @@ export function CaseListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const severity = searchParams.get("severity") ?? "";
   const status = searchParams.get("status") ?? "";
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkStatus, setBulkStatus] = useState<string>(STATUSES[0]);
   const [applyingBulk, setApplyingBulk] = useState(false);
   const [report, setReport] = useState<ReportResult | null>(null);
@@ -56,7 +56,7 @@ export function CaseListPage() {
 
   useEffect(loadCases, [severity, status]);
 
-  function toggleSelected(id: number) {
+  function toggleSelected(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);

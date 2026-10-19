@@ -26,7 +26,7 @@ export interface TimelineEvent {
 }
 
 export interface CaseSummary {
-  id: number;
+  id: string;
   case_ref: string;
   run_id: number;
   subject_type: string;
@@ -42,7 +42,7 @@ export interface CaseSummary {
 }
 
 export interface CaseDetail {
-  id: number;
+  id: string;
   case_ref: string;
   run_id: number;
   subject_type: string;
@@ -95,23 +95,64 @@ export interface ReportResult {
   generated_at: string;
 }
 
+export interface UploadTarget {
+  file: string;
+  url: string;
+  method: string;
+}
+
+export interface DatasetCreateResult {
+  dataset_id: string;
+  uploads: UploadTarget[];
+}
+
+export type DatasetStatus = "pending" | "ready" | "invalid";
+
 export interface UploadResult {
   dataset_id: string;
-  files_received: string[];
+  status: DatasetStatus;
+  errors: string[];
+  created_at: string;
+}
+
+export type JobStatus = "queued" | "running" | "succeeded" | "failed";
+
+export interface Job<T> {
+  id: string;
+  kind: "analysis" | "analytics" | "report";
+  status: JobStatus;
+  result: T | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface RunSummary {
   id: number;
   dataset_id: string;
+  status: JobStatus;
+  job_id: string | null;
   created_at: string;
+  completed_at: string | null;
   flag_count: number;
   case_count: number;
+  severity_counts: Record<string, number>;
+  rule_counts: Record<string, number>;
+  error: string | null;
+}
+
+export interface ActivityEntry {
+  at: string;
+  actor_email: string;
+  actor_name: string;
+  action: string;
+  detail: Record<string, unknown>;
 }
 
 export type Role = "auditor" | "admin";
 
 export interface UserInfo {
-  id: number;
+  id: string;
   email: string;
   name: string;
   role: Role;

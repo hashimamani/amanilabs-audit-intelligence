@@ -1,16 +1,13 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: audit_intelligence
-      POSTGRES_PASSWORD: audit_intelligence
-      POSTGRES_DB: audit_intelligence
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/home/dynamodblocal/data"]
     ports:
-      - "5432:5432"
+      - "8000:8000"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - dynamodb_data:/home/dynamodblocal/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U audit_intelligence"]
+      test: ["CMD-SHELL", "curl -s http://localhost:8000 >/dev/null || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -20,15 +17,21 @@ services:
       context: .
       dockerfile: audit_intelligence/backend/Dockerfile
     environment:
-      DATABASE_URL: postgresql+psycopg://audit_intelligence:audit_intelligence@postgres:5432/audit_intelligence
-      JWT_SECRET: ${JWT_SECRET:-dev-insecure-secret-change-before-any-real-deploy}
+      APP_ENV: local
+      AUTH_MODE: local
+      DATASET_STORE: local
+      JOB_RUNNER: inline
+      DYNAMODB_ENDPOINT: http://dynamodb:8000
+      AWS_REGION: eu-west-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - backend_uploads:/app/audit_intelligence/backend/data/uploads
     depends_on:
-      postgres:
+      dynamodb:
         condition: service_healthy
 
   frontend:
@@ -41,5 +44,5 @@ services:
       - backend
 
 volumes:
-  postgres_data:
+  dynamodb_data:
   backend_uploads:

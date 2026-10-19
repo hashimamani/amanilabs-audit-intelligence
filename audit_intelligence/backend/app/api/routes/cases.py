@@ -1,20 +1,20 @@
 import anthropic
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
 
-from app.core.db import get_db
-from app.core.auth import get_current_tenant
-from app.core.ai import call_claude, case_to_grounding_text, get_anthropic_client
-from app.db.models import CaseORM, AnalysisRunORM, TenantORM
 from app.api.schemas import (
-    CaseSummaryOut,
-    CaseDetailOut,
-    CaseUpdateIn,
+    ActivityOut,
     BulkCaseStatusIn,
     BulkCaseStatusOut,
     CaseAskIn,
     CaseAskOut,
+    CaseDetailOut,
+    CaseSummaryOut,
+    CaseUpdateIn,
 )
+from app.core.ai import call_claude, case_to_grounding_text, get_anthropic_client
+from app.core.auth import Principal, get_current_tenant, get_current_user
+from app.db import repository as repo
+from app.db.repository import Tenant
 
 router = APIRouter(prefix="/cases", tags=["cases"])
 
@@ -33,131 +33,107 @@ CASE RECORD:
 """
 
 
-def _latest_run_id(db: Session, tenant_id: int) -> int | None:
-    latest = (
-        db.query(AnalysisRunORM)
-        .filter(AnalysisRunORM.tenant_id == tenant_id)
-        .order_by(AnalysisRunORM.created_at.desc())
-        .first()
-    )
-    return latest.id if latest else None
+def to_summary(row: dict) -> CaseSummaryOut:
+    return CaseSummaryOut(id=row["case_ref"], **{k: row.get(k) for k in CaseSummaryOut.model_fields if k != "id"})
 
 
-def _to_summary(row: CaseORM) -> CaseSummaryOut:
-    return CaseSummaryOut(
-        id=row.id,
-        case_ref=row.case_ref,
-        run_id=row.run_id,
-        subject_type=row.subject_type,
-        subject_id=row.subject_id,
-        subject_name=row.subject_name,
-        risk_score=row.risk_score,
-        severity=row.severity,
-        status=row.status,
-        triggered_rules=row.triggered_rules,
-        flag_count=len(row.flags),
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
+def to_detail(row: dict) -> CaseDetailOut:
+    return CaseDetailOut(id=row["case_ref"], **{k: row.get(k) for k in CaseDetailOut.model_fields if k != "id"})
+
+
+def _get_or_404(tenant: Tenant, case_ref: str) -> dict:
+    row = repo.get_case(tenant.slug, case_ref)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Case {case_ref} not found")
+    return row
 
 
 @router.get("", response_model=list[CaseSummaryOut])
 def list_cases(
-    run_id: int | None = Query(None, description="Defaults to the most recent analysis run"),
+    run_id: int | None = Query(None, description="Defaults to the most recent completed analysis run"),
     status: str | None = None,
     severity: str | None = None,
     min_risk: float | None = None,
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, le=500),
     offset: int = 0,
-    db: Session = Depends(get_db),
-    tenant: TenantORM = Depends(get_current_tenant),
+    tenant: Tenant = Depends(get_current_tenant),
 ):
-    effective_run_id = run_id if run_id is not None else _latest_run_id(db, tenant.id)
-    if effective_run_id is None:
-        return []
-
-    q = db.query(CaseORM).filter(
-        CaseORM.run_id == effective_run_id,
-        CaseORM.tenant_id == tenant.id,
-    )
-    if status:
-        q = q.filter(CaseORM.status == status)
-    if severity:
-        q = q.filter(CaseORM.severity == severity)
-    if min_risk is not None:
-        q = q.filter(CaseORM.risk_score >= min_risk)
-
-    rows = q.order_by(CaseORM.risk_score.desc()).offset(offset).limit(limit).all()
-    return [_to_summary(r) for r in rows]
+    if run_id is None:
+        latest = repo.latest_run(tenant.slug)
+        if latest is None:
+            return []
+        run_id = latest["run_id"]
+    rows = repo.list_case_summaries(tenant.slug, run_id, status=status, severity=severity, min_risk=min_risk)
+    return [to_summary(r) for r in rows[offset:offset + limit]]
 
 
 @router.patch("/bulk-status", response_model=BulkCaseStatusOut)
 def bulk_update_status(
     payload: BulkCaseStatusIn,
-    db: Session = Depends(get_db),
-    tenant: TenantORM = Depends(get_current_tenant),
+    tenant: Tenant = Depends(get_current_tenant),
+    user: Principal = Depends(get_current_user),
 ):
-    if not payload.case_ids:
-        return BulkCaseStatusOut(updated_count=0)
-
-    updated = (
-        db.query(CaseORM)
-        .filter(CaseORM.id.in_(payload.case_ids), CaseORM.tenant_id == tenant.id)
-        .update({"status": payload.status}, synchronize_session=False)
-    )
-    db.commit()
+    updated = 0
+    for case_ref in payload.case_ids:
+        before = repo.get_case(tenant.slug, case_ref)
+        if before is None:
+            continue
+        repo.update_case(tenant.slug, case_ref, status=payload.status)
+        updated += 1
+        if before["status"] != payload.status:
+            repo.add_activity(
+                tenant.slug, case_ref, actor_email=user.email, actor_name=user.name,
+                action="status_changed", detail={"from": before["status"], "to": payload.status, "bulk": True},
+            )
     return BulkCaseStatusOut(updated_count=updated)
 
 
-@router.get("/{case_id}", response_model=CaseDetailOut)
-def get_case(
-    case_id: int,
-    db: Session = Depends(get_db),
-    tenant: TenantORM = Depends(get_current_tenant),
-):
-    row = db.query(CaseORM).filter(CaseORM.id == case_id, CaseORM.tenant_id == tenant.id).first()
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
-    return row
+@router.get("/{case_ref}", response_model=CaseDetailOut)
+def get_case(case_ref: str, tenant: Tenant = Depends(get_current_tenant)):
+    return to_detail(_get_or_404(tenant, case_ref))
 
 
-@router.patch("/{case_id}", response_model=CaseDetailOut)
+@router.get("/{case_ref}/activity", response_model=list[ActivityOut])
+def get_case_activity(case_ref: str, tenant: Tenant = Depends(get_current_tenant)):
+    _get_or_404(tenant, case_ref)
+    return repo.list_activity(tenant.slug, case_ref)
+
+
+@router.patch("/{case_ref}", response_model=CaseDetailOut)
 def update_case(
-    case_id: int,
+    case_ref: str,
     payload: CaseUpdateIn,
-    db: Session = Depends(get_db),
-    tenant: TenantORM = Depends(get_current_tenant),
+    tenant: Tenant = Depends(get_current_tenant),
+    user: Principal = Depends(get_current_user),
 ):
-    row = db.query(CaseORM).filter(CaseORM.id == case_id, CaseORM.tenant_id == tenant.id).first()
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+    before = _get_or_404(tenant, case_ref)
+    after = repo.update_case(
+        tenant.slug, case_ref, status=payload.status, assigned_auditor=payload.assigned_auditor,
+        outcome=payload.outcome, add_note=payload.add_note,
+    )
 
-    if payload.status is not None:
-        row.status = payload.status
-    if payload.assigned_auditor is not None:
-        row.assigned_auditor = payload.assigned_auditor
-    if payload.outcome is not None:
-        row.outcome = payload.outcome
+    def record(action: str, detail: dict) -> None:
+        repo.add_activity(tenant.slug, case_ref, actor_email=user.email, actor_name=user.name, action=action, detail=detail)
+
+    if payload.status is not None and payload.status != before["status"]:
+        record("status_changed", {"from": before["status"], "to": payload.status})
+    if payload.assigned_auditor is not None and payload.assigned_auditor != (before.get("assigned_auditor") or ""):
+        record("assigned", {"from": before.get("assigned_auditor"), "to": payload.assigned_auditor})
+    if payload.outcome is not None and payload.outcome != (before.get("outcome") or ""):
+        record("outcome_set", {"from": before.get("outcome"), "to": payload.outcome})
     if payload.add_note is not None:
-        row.notes = [*row.notes, payload.add_note]
-
-    db.commit()
-    db.refresh(row)
-    return row
+        record("note_added", {"note": payload.add_note})
+    return to_detail(after)
 
 
-@router.post("/{case_id}/ask", response_model=CaseAskOut)
+@router.post("/{case_ref}/ask", response_model=CaseAskOut)
 def ask_case_question(
-    case_id: int,
+    case_ref: str,
     payload: CaseAskIn,
-    db: Session = Depends(get_db),
-    tenant: TenantORM = Depends(get_current_tenant),
+    tenant: Tenant = Depends(get_current_tenant),
     client: anthropic.Anthropic = Depends(get_anthropic_client),
 ):
-    row = db.query(CaseORM).filter(CaseORM.id == case_id, CaseORM.tenant_id == tenant.id).first()
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
-
+    row = _get_or_404(tenant, case_ref)
     system_prompt = CASE_QA_SYSTEM_PROMPT.format(grounding_context=case_to_grounding_text(row))
     response = call_claude(
         client,
