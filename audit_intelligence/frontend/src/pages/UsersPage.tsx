@@ -2,14 +2,18 @@ import { useEffect, useState } from "react";
 import { ShieldCheck, UserPlus } from "lucide-react";
 import { ApiError, createUser, listUsers, updateUser } from "../api/client";
 import type { Role, UserInfo } from "../api/types";
+import { getConfig } from "../config";
+import { TableSkeleton } from "../ui/Skeleton";
+import { useToast } from "../ui/Toast";
 
 const ROLES: Role[] = ["auditor", "admin"];
 
 export function UsersPage() {
+  const toast = useToast();
+  const cognito = getConfig().authMode === "cognito";
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -31,7 +35,8 @@ export function UsersPage() {
     setCreating(true);
     setError(null);
     try {
-      await createUser({ email, name, password, role });
+      await createUser({ email, name, role, ...(cognito ? {} : { password }) });
+      toast.success(cognito ? `${name} has been emailed a temporary password.` : `${name} can sign in now.`);
       setEmail("");
       setName("");
       setPassword("");
@@ -44,21 +49,13 @@ export function UsersPage() {
     }
   }
 
-  async function handleToggleActive(u: UserInfo) {
+  async function change(u: UserInfo, patch: { role?: Role; is_active?: boolean }, done: string) {
     try {
-      await updateUser(u.id, { is_active: !u.is_active });
+      await updateUser(u.id, patch);
+      toast.success(done);
       loadUsers();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Update failed.");
-    }
-  }
-
-  async function handleRoleChange(u: UserInfo, newRole: Role) {
-    try {
-      await updateUser(u.id, { role: newRole });
-      loadUsers();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Update failed.");
+      toast.error(err instanceof ApiError ? err.message : "Update failed.");
     }
   }
 
@@ -67,7 +64,7 @@ export function UsersPage() {
       <div>
         <h1 className="text-2xl font-semibold text-slate-900">Users</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Manage auditor and admin accounts for your tenant.
+          Auditors work cases and run analyses; admins also manage this list. Deactivating someone locks them out on their next request.
         </p>
       </div>
 
@@ -75,42 +72,25 @@ export function UsersPage() {
 
       <section className="card p-6">
         <h2 className="text-base font-semibold text-slate-900">Add a user</h2>
-        <form onSubmit={handleCreate} className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-5 sm:items-end">
+        {cognito && <p className="mt-1 text-sm text-slate-500">They will be emailed a temporary password and asked to choose their own at first sign-in.</p>}
+        <form onSubmit={handleCreate} className={`mt-4 grid grid-cols-1 gap-4 sm:items-end ${cognito ? "sm:grid-cols-4" : "sm:grid-cols-5"}`}>
           <div>
             <label className="text-xs font-medium text-slate-500">Name</label>
-            <input
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="input-field mt-1 block w-full"
-            />
+            <input required value={name} onChange={(e) => setName(e.target.value)} className="input-field mt-1 block w-full" />
           </div>
           <div>
             <label className="text-xs font-medium text-slate-500">Email</label>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="input-field mt-1 block w-full"
-            />
+            <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="input-field mt-1 block w-full" />
           </div>
-          <div>
-            <label className="text-xs font-medium text-slate-500">Initial password</label>
-            <input
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="input-field mt-1 block w-full"
-            />
-          </div>
+          {!cognito && (
+            <div>
+              <label className="text-xs font-medium text-slate-500">Initial password</label>
+              <input required value={password} onChange={(e) => setPassword(e.target.value)} className="input-field mt-1 block w-full" />
+            </div>
+          )}
           <div>
             <label className="text-xs font-medium text-slate-500">Role</label>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value as Role)}
-              className="input-field mt-1 block w-full"
-            >
+            <select value={role} onChange={(e) => setRole(e.target.value as Role)} className="input-field mt-1 block w-full">
               {ROLES.map((r) => (
                 <option key={r} value={r}>
                   {r}
@@ -120,15 +100,15 @@ export function UsersPage() {
           </div>
           <button type="submit" disabled={creating} className="btn-primary flex items-center gap-2 py-1.5">
             <UserPlus className="h-4 w-4" />
-            Add user
+            {creating ? "Adding…" : "Add user"}
           </button>
         </form>
       </section>
 
       {loading ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <TableSkeleton rows={4} />
       ) : (
-        <div className="card overflow-hidden">
+        <div className="card overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50">
               <tr>
@@ -149,11 +129,10 @@ export function UsersPage() {
                       {u.role === "admin" && <ShieldCheck className="h-3.5 w-3.5 text-indigo-600" />}
                       <select
                         value={u.role}
-                        onChange={(e) => handleRoleChange(u, e.target.value as Role)}
+                        aria-label={`Role for ${u.name}`}
+                        onChange={(e) => void change(u, { role: e.target.value as Role }, `${u.name} is now ${e.target.value}.`)}
                         className={`rounded-md border px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${
-                          u.role === "admin"
-                            ? "border-indigo-200 bg-indigo-50 text-indigo-700"
-                            : "border-slate-300 text-slate-700"
+                          u.role === "admin" ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-slate-300 text-slate-700"
                         }`}
                       >
                         {ROLES.map((r) => (
@@ -165,18 +144,14 @@ export function UsersPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3">
-                    <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${
-                        u.is_active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
-                      }`}
-                    >
+                    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${u.is_active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
                       <span className="h-1.5 w-1.5 rounded-full bg-current" />
                       {u.is_active ? "Active" : "Deactivated"}
                     </span>
                   </td>
                   <td className="px-4 py-3">
                     <button
-                      onClick={() => handleToggleActive(u)}
+                      onClick={() => void change(u, { is_active: !u.is_active }, u.is_active ? `${u.name} has been deactivated.` : `${u.name} has been reactivated.`)}
                       className="text-sm font-medium text-slate-500 hover:text-slate-700"
                     >
                       {u.is_active ? "Deactivate" : "Reactivate"}

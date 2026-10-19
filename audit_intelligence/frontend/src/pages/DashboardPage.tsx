@@ -1,22 +1,17 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import {
-  AlertTriangle,
-  CircleDot,
-  Flag as FlagIcon,
-  FolderOpen,
-  PlayCircle,
-  Send,
-  Sparkles,
-} from "lucide-react";
-import { ApiError, listCases, listRuns, queryAnalytics } from "../api/client";
-import type { AnalyticsQueryResult, CaseSummary, RunSummary, Severity } from "../api/types";
+import { AlertTriangle, CircleDot, Flag as FlagIcon, FolderOpen, Send, Sparkles } from "lucide-react";
+import { ApiError, listCases, queryAnalytics } from "../api/client";
+import { SEVERITIES, type AnalyticsQueryResult, type CaseSummary, type Severity } from "../api/types";
 import { BarChart } from "../components/BarChart";
 import { LineChart } from "../components/LineChart";
+import { RuleLabel } from "../components/RuleLabel";
 import { SeverityBadge } from "../components/SeverityBadge";
-
-const SEVERITIES: Severity[] = ["Critical", "High", "Medium", "Low"];
-const STATUSES = ["Open", "In Progress", "Closed"];
+import { useRun } from "../contexts/RunContext";
+import { delta, formatDateTime } from "../lib/format";
+import { CardSkeleton } from "../ui/Skeleton";
+import { EmptyState } from "../ui/EmptyState";
+import { JobProgress } from "../ui/JobProgress";
 
 const SEVERITY_BAR: Record<Severity, string> = {
   Critical: "bg-red-500",
@@ -25,55 +20,50 @@ const SEVERITY_BAR: Record<Severity, string> = {
   Low: "bg-slate-400",
 };
 
-function formatTimestamp(ts: string): string {
-  return new Date(ts).toLocaleString();
+function Delta({ current, previous }: { current: number; previous: number | undefined }) {
+  const d = delta(current, previous);
+  if (!d) return <span className="text-xs text-slate-400">first run</span>;
+  const tone = d.tone === "flat" ? "text-slate-400" : d.tone === "up" ? "text-red-600" : "text-emerald-600";
+  return <span className={`text-xs ${tone}`}>{d.text}</span>;
+}
+
+function Tile({ label, value, previous, icon: Icon }: { label: string; value: number; previous?: number; icon: typeof FlagIcon }) {
+  return (
+    <div className="card flex items-start justify-between p-4">
+      <div>
+        <div className="text-xs font-medium text-slate-500">{label}</div>
+        <div className="mt-1 text-2xl font-semibold text-slate-900">{value}</div>
+        <Delta current={value} previous={previous} />
+      </div>
+      <Icon className="h-5 w-5 text-indigo-500" />
+    </div>
+  );
 }
 
 export function DashboardPage() {
-  const [run, setRun] = useState<RunSummary | null>(null);
+  const { selectedRun: run, previousRun, loading: runsLoading } = useRun();
   const [cases, setCases] = useState<CaseSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [chartQuestionDraft, setChartQuestionDraft] = useState("");
-  const [chartResult, setChartResult] = useState<AnalyticsQueryResult | null>(null);
+  const [question, setQuestion] = useState("");
+  const [chart, setChart] = useState<AnalyticsQueryResult | null>(null);
   const [loadingChart, setLoadingChart] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
 
-  async function handleChartQuery() {
-    if (!chartQuestionDraft.trim()) return;
-    setLoadingChart(true);
-    setChartError(null);
-    try {
-      const result = await queryAnalytics(chartQuestionDraft.trim());
-      setChartResult(result);
-    } catch (e) {
-      setChartError(e instanceof ApiError ? e.message : "Failed to generate a chart.");
-    } finally {
-      setLoadingChart(false);
-    }
-  }
-
   useEffect(() => {
+    if (!run) {
+      setCases([]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
-    listRuns()
-      .then(async (runs) => {
-        const latest = runs[0] ?? null;
-        if (cancelled) return;
-        setRun(latest);
-        if (!latest) {
-          setCases([]);
-          return;
-        }
-        // Dashboard-scale aggregation only: pulls the API's max page size
-        // (200) and aggregates client-side rather than adding a dedicated
-        // backend stats endpoint - fine at this project's case volumes
-        // (dozens, not thousands), revisit if that changes.
-        const runCases = await listCases({ runId: latest.id, limit: 200 });
-        if (!cancelled) setCases(runCases);
+    listCases({ runId: run.id, limit: 500 })
+      .then((rows) => {
+        if (!cancelled) setCases(rows);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof ApiError ? e.message : "Failed to load dashboard.");
+        if (!cancelled) setError(e instanceof ApiError ? e.message : "Failed to load the dashboard.");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -81,119 +71,98 @@ export function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [run]);
 
-  if (loading) return <p className="text-sm text-slate-500">Loading...</p>;
-  if (error) return <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>;
+  async function askForChart() {
+    if (!question.trim()) return;
+    setLoadingChart(true);
+    setChartError(null);
+    try {
+      setChart(await queryAnalytics(question.trim()));
+    } catch (e) {
+      setChartError(e instanceof ApiError ? e.message : "Failed to generate a chart.");
+    } finally {
+      setLoadingChart(false);
+    }
+  }
 
-  if (!run) {
+  if (runsLoading || (loading && run)) {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-semibold text-slate-900">Dashboard</h1>
-        <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
-          No analysis runs yet.{" "}
-          <Link to="/upload" className="font-medium text-slate-900 underline">
-            Run an analysis
-          </Link>{" "}
-          to get started.
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => <CardSkeleton key={i} lines={1} />)}
+        </div>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <CardSkeleton />
+          <CardSkeleton />
         </div>
       </div>
     );
   }
-
-  const severityCounts = SEVERITIES.map((s) => ({
-    severity: s,
-    count: cases.filter((c) => c.severity === s).length,
-  }));
-  const statusCounts = STATUSES.map((s) => ({
-    status: s,
-    count: cases.filter((c) => c.status === s).length,
-  }));
-  const ruleCounts = new Map<string, number>();
-  for (const c of cases) {
-    for (const rule of c.triggered_rules) {
-      ruleCounts.set(rule, (ruleCounts.get(rule) ?? 0) + 1);
-    }
+  if (error) return <div className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</div>;
+  if (!run) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-semibold text-slate-900">Dashboard</h1>
+        <EmptyState
+          title="No analysis has been run yet"
+          description="Run the engine on the bundled demo data or upload a SACCO's export to see cases here."
+          action={<Link to="/upload" className="btn-primary">Run an analysis</Link>}
+        />
+      </div>
+    );
   }
-  const topRules = [...ruleCounts.entries()].sort((a, b) => b[1] - a[1]);
-  const topCases = [...cases].sort((a, b) => b.risk_score - a.risk_score).slice(0, 5);
-  const maxSeverityCount = Math.max(1, ...severityCounts.map((s) => s.count));
+
+  const severityCount = (s: Severity, r = run) => r.severity_counts[s] ?? 0;
+  const criticalHigh = severityCount("Critical") + severityCount("High");
+  const prevCriticalHigh = previousRun ? severityCount("Critical", previousRun) + severityCount("High", previousRun) : undefined;
+  const openCount = cases.filter((c) => c.status === "Open").length;
+  const statusCounts = ["Open", "In Progress", "Closed"].map((s) => ({ status: s, count: cases.filter((c) => c.status === s).length }));
+  const maxSeverity = Math.max(1, ...SEVERITIES.map((s) => severityCount(s)));
+  const topRules = Object.entries(run.rule_counts).sort((a, b) => b[1] - a[1]);
+  const topCases = cases.slice(0, 5);
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">Dashboard</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Latest run: {run.dataset_id} &middot; {formatTimestamp(run.created_at)}
-          </p>
-        </div>
-        <Link to="/upload" className="btn-primary flex items-center gap-2">
-          <PlayCircle className="h-4 w-4" />
-          Run new analysis
-        </Link>
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-900">Dashboard</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          Run #{run.id} · {run.dataset_id === "default" ? "demo dataset" : `dataset ${run.dataset_id}`} · {formatDateTime(run.completed_at ?? run.created_at)}
+          {previousRun && ` · compared with run #${previousRun.id}`}
+        </p>
       </div>
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <div className="card flex items-start justify-between p-4">
-          <div>
-            <div className="text-xs font-medium text-slate-500">Flags raised</div>
-            <div className="mt-1 text-2xl font-semibold text-slate-900">{run.flag_count}</div>
-          </div>
-          <FlagIcon className="h-5 w-5 text-indigo-500" />
-        </div>
-        <div className="card flex items-start justify-between p-4">
-          <div>
-            <div className="text-xs font-medium text-slate-500">Cases opened</div>
-            <div className="mt-1 text-2xl font-semibold text-slate-900">{run.case_count}</div>
-          </div>
-          <FolderOpen className="h-5 w-5 text-indigo-500" />
-        </div>
-        <div className="card flex items-start justify-between p-4">
-          <div>
-            <div className="text-xs font-medium text-slate-500">Critical + High</div>
-            <div className="mt-1 text-2xl font-semibold text-slate-900">
-              {severityCounts[0].count + severityCounts[1].count}
-            </div>
-          </div>
-          <AlertTriangle className="h-5 w-5 text-indigo-500" />
-        </div>
-        <div className="card flex items-start justify-between p-4">
-          <div>
-            <div className="text-xs font-medium text-slate-500">Still open</div>
-            <div className="mt-1 text-2xl font-semibold text-slate-900">
-              {statusCounts[0].count}
-            </div>
-          </div>
-          <CircleDot className="h-5 w-5 text-indigo-500" />
-        </div>
+        <Tile label="Flags raised" value={run.flag_count} previous={previousRun?.flag_count} icon={FlagIcon} />
+        <Tile label="Cases opened" value={run.case_count} previous={previousRun?.case_count} icon={FolderOpen} />
+        <Tile label="Critical + High" value={criticalHigh} previous={prevCriticalHigh} icon={AlertTriangle} />
+        <Tile label="Still open" value={openCount} icon={CircleDot} />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <section className="card p-6">
           <h2 className="text-base font-semibold text-slate-900">Cases by severity</h2>
           <ul className="mt-4 space-y-3">
-            {severityCounts.map(({ severity, count }) => (
-              <li key={severity}>
-                <Link
-                  to={`/cases?severity=${severity}`}
-                  className="flex items-center gap-3 text-sm hover:opacity-80"
-                >
-                  <span className="w-16 shrink-0">
-                    <SeverityBadge severity={severity} />
-                  </span>
-                  <span className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
-                    <span
-                      className={`block h-full rounded-full ${SEVERITY_BAR[severity]}`}
-                      style={{ width: `${(count / maxSeverityCount) * 100}%` }}
-                    />
-                  </span>
-                  <span className="w-6 shrink-0 text-right font-medium text-slate-900">
-                    {count}
-                  </span>
-                </Link>
-              </li>
-            ))}
+            {SEVERITIES.map((severity) => {
+              const count = severityCount(severity);
+              return (
+                <li key={severity}>
+                  <Link to={`/cases?severity=${severity}`} className="flex items-center gap-3 text-sm hover:opacity-80">
+                    <span className="w-20 shrink-0">
+                      <SeverityBadge severity={severity} />
+                    </span>
+                    <span className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                      <span className={`block h-full rounded-full ${SEVERITY_BAR[severity]}`} style={{ width: `${(count / maxSeverity) * 100}%` }} />
+                    </span>
+                    <span className="w-8 shrink-0 text-right font-medium text-slate-900">{count}</span>
+                    <span className="w-24 shrink-0 text-right">
+                      <Delta current={count} previous={previousRun ? severityCount(severity, previousRun) : undefined} />
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
         </section>
 
@@ -202,10 +171,7 @@ export function DashboardPage() {
           <ul className="mt-4 space-y-3">
             {statusCounts.map(({ status, count }) => (
               <li key={status}>
-                <Link
-                  to={`/cases?status=${status}`}
-                  className="flex items-center justify-between text-sm hover:underline"
-                >
+                <Link to={`/cases?status=${status}`} className="flex items-center justify-between text-sm hover:underline">
                   <span className="text-slate-700">{status}</span>
                   <span className="font-medium text-slate-900">{count}</span>
                 </Link>
@@ -223,9 +189,14 @@ export function DashboardPage() {
           ) : (
             <ul className="mt-4 divide-y divide-slate-100">
               {topRules.map(([rule, count]) => (
-                <li key={rule} className="flex items-center justify-between py-2 text-sm">
-                  <span className="text-slate-700">{rule}</span>
-                  <span className="font-medium text-slate-900">{count} case{count === 1 ? "" : "s"}</span>
+                <li key={rule} className="flex items-center justify-between gap-3 py-2 text-sm">
+                  <Link to="/rules" className="min-w-0 truncate hover:underline">
+                    <RuleLabel id={rule} />
+                  </Link>
+                  <span className="flex shrink-0 items-center gap-3">
+                    <Delta current={count} previous={previousRun?.rule_counts[rule]} />
+                    <span className="font-medium text-slate-900">{count} case{count === 1 ? "" : "s"}</span>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -241,7 +212,7 @@ export function DashboardPage() {
               {topCases.map((c) => (
                 <li key={c.id} className="flex items-center justify-between py-2 text-sm">
                   <Link to={`/cases/${c.id}`} className="text-slate-700 hover:underline">
-                    {c.case_ref} &middot; {c.subject_name}
+                    {c.case_ref} · {c.subject_name}
                   </Link>
                   <span className="flex items-center gap-2">
                     <SeverityBadge severity={c.severity} />
@@ -260,45 +231,32 @@ export function DashboardPage() {
           Ask for a chart
         </h2>
         <p className="mt-1 text-sm text-slate-500">
-          e.g. "average risk score for R001 cases" or "trend of Critical cases this month" — the AI
-          writes and runs real code against your actual case data; it never states a number it hasn't
-          computed.
+          e.g. "average risk score for R001 cases" or "trend of Critical cases" — the AI writes and runs real code against your case data; it never states a number it hasn't computed.
         </p>
         <div className="mt-4 flex gap-2">
           <input
-            value={chartQuestionDraft}
-            onChange={(e) => setChartQuestionDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleChartQuery()}
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && void askForChart()}
             placeholder="Ask a question..."
+            aria-label="Chart question"
             className="input-field flex-1"
           />
-          <button
-            onClick={handleChartQuery}
-            disabled={loadingChart || !chartQuestionDraft.trim()}
-            className="btn-primary flex items-center gap-2 py-1.5"
-          >
+          <button onClick={() => void askForChart()} disabled={loadingChart || !question.trim()} className="btn-primary flex items-center gap-2 py-1.5">
             <Send className="h-4 w-4" />
-            {loadingChart ? "Analyzing..." : "Ask"}
+            Ask
           </button>
         </div>
         {loadingChart && (
-          <p className="mt-2 text-xs text-slate-400">
-            Writing and running real code against your case data — this can take up to a minute.
-          </p>
+          <div className="mt-3">
+            <JobProgress label="Analysing your cases" hints={["Handing the case data to the sandbox…", "Writing and running pandas code…", "Checking the result…", "Almost there — this can take up to a minute."]} />
+          </div>
         )}
-        {chartError && (
-          <div className="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-800">{chartError}</div>
-        )}
-        {chartResult && (
+        {chartError && <div className="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-800">{chartError}</div>}
+        {chart && !loadingChart && (
           <div className="mt-4">
-            <h3 className="text-sm font-medium text-slate-900">{chartResult.title}</h3>
-            <div className="mt-3">
-              {chartResult.chart_type === "line" ? (
-                <LineChart data={chartResult.data} />
-              ) : (
-                <BarChart data={chartResult.data} />
-              )}
-            </div>
+            <h3 className="text-sm font-medium text-slate-900">{chart.title}</h3>
+            <div className="mt-3">{chart.chart_type === "line" ? <LineChart data={chart.data} /> : <BarChart data={chart.data} />}</div>
           </div>
         )}
       </section>

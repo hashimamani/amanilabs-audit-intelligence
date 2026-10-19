@@ -1774,11 +1774,87 @@ Five CDK stacks per stage in `infra/lib/stacks/`, wired in `lib/app.ts`
   non-root identity (docs/DEPLOYING.md), then `gh workflow run
   deploy.yml -f stage=dev -f confirm=dev`.
 
+### Phase 3 - the frontend (done 2026-10-19)
+
+The app is no longer a three-page CRUD demo. Same indigo/slate system,
+same `lucide-react` icons; the structure and the behaviour changed.
+
+- **Runtime config + Cognito**: `src/config.ts` fetches `/config.json`
+  (written by the Web stack) and falls back to local auth mode when it is
+  absent, so one build serves every stage and `npm run dev` keeps working
+  with no Cognito at all. `src/auth/AuthContext.tsx` drives both modes
+  behind one interface: Cognito via `aws-amplify/auth` (SRP sign-in, the
+  forced new-password step, TOTP setup with a QR code from `qrcode` and
+  the TOTP code step - prod requires MFA - and forgot-password), local via
+  `POST /auth/login`. The API client gets its bearer from a
+  `setTokenProvider` hook: Cognito's **ID token** (the one carrying
+  `custom:tenant`) when deployed, the stored local token otherwise.
+  `LoginPage` is one multi-step form over those states; errors are
+  translated from Cognito's exception names into sentences.
+- **App shell** (`components/Layout.tsx`): sidebar navigation (Dashboard,
+  Cases, Upload & Analyze, Rules, Users for admins) with the user and
+  tenant in the footer; a top bar with the **run selector**
+  (`contexts/RunContext.tsx` - the chosen run, persisted in
+  localStorage, else the latest succeeded run; `previousRun` is the one
+  before it) and the run button. Collapses to a top nav on small screens.
+- **Rules are named everywhere**: `GET /rules` (new,
+  `app/rules/catalogue.py`) returns id, name, a plain-English summary,
+  how it works, what it may indicate and the thresholds with human
+  labels; `contexts/RulesContext.tsx` caches it and `RuleLabel` renders
+  `R001 · Large Withdrawal` with the summary as a tooltip. The **Rules
+  page** is the catalogue with per-rule case counts for the selected run
+  - the "what does the system check" answer for a board, in the product.
+- **Dashboard**: tiles and severity bars carry run-over-run deltas
+  (`+12 since last run`, red when up) from the `severity_counts`/
+  `rule_counts` Phase 1 stored on each run; the most-triggered list shows
+  names; the chart panel shows a `JobProgress` (elapsed seconds and a
+  rotating hint) instead of a bare spinner.
+- **Cases**: a TanStack Table (`ui/DataTable.tsx`, generic): search across
+  case ref, member name and ID; sortable columns; 25 per page; a
+  selection column that does not trigger the row click; severity, rule
+  (deep-linked from the Rules page as `?rule=R00x`) and status filters in
+  the URL; status pills; an **age** column. Bulk status changes and the
+  board report give toasts and progress.
+- **Case page**: previous/next through the run's ranking (`3 of 91`), the
+  status select saves immediately with a toast, assignee/outcome have an
+  explicit Save enabled only when dirty, and the **Activity** panel shows
+  the Phase 1 trail as sentences ("Jane changed status from Open to In
+  Progress", with the bulk marker).
+- **Upload**: per-file validation errors from finalize shown inline, the
+  tenant's uploaded datasets listed with status and a run button, and the
+  run switches the selector to the new run when it finishes.
+- **Users**: no password field in Cognito mode (Cognito emails a temporary
+  one); role and activation changes toast.
+- **Plumbing**: `ui/Toast.tsx` (no dependency), `ui/Skeleton.tsx` instead
+  of "Loading...", `ui/ErrorBoundary.tsx`, `ui/EmptyState.tsx`, dates via
+  `lib/format.ts` in `en-KE`.
+- **Tests**: vitest + Testing Library (`npm test`, 14 tests: the client's
+  polling and upload contract against a mocked `fetch`, the table's sort/
+  search/pagination/selection, the activity sentences, the local login
+  page - which caught a real bug: the login labels were not associated
+  with their inputs). Playwright (`npm run test:e2e`, `e2e/smoke.spec.ts`)
+  signs in, runs the demo analysis, opens the top case, changes its
+  status and reads it back from the activity trail, then opens the rules
+  page - against the real backend on DynamoDB Local. CI gained the unit
+  tests in the frontend job and an `e2e` job that stands the same stack
+  up (DynamoDB Local service container, uvicorn, Vite, Chromium).
+- **Bundle**: 919 KB / 272 KB gzipped (Amplify is most of the growth).
+  Code-splitting is a fast-follow if it ever matters for a tool used by a
+  handful of staff.
+- **Verified**: `tsc -b`, oxlint (four fast-refresh warnings on context
+  files, informational), `npm run build`, 14 unit tests, the Playwright
+  smoke (16.6 s), and a browser walkthrough against the local stack with
+  two runs so the deltas had something to compare: dashboard, cases
+  (sort, search, pills, age), a case with prev/next and its activity,
+  rules. The Cognito code path cannot be exercised until dev is deployed
+  - that is the first thing to do after the bootstrap.
+
 ### What the next session should do
 
 If dev is bootstrapped: dispatch the deploy, confirm the alarm email, put
-the Anthropic key in, provision a tenant, then Phase 3 (the frontend:
-Cognito login against `config.json`, app shell, TanStack Table case list,
-job progress, triage flow, activity timeline, dashboard deltas, rule
-catalogue, tests). If not, Phase 3 can start regardless - everything it
-needs locally works against the local auth mode.
+the Anthropic key in, provision a tenant, sign in through Cognito (new
+password, TOTP if enabled) and walk the app on the CloudFront URL. Then
+Phase 4: per-tenant AI budget/rate limit, `delete_tenant`, prod config
+and the first prod deploy, custom domain when one exists, runbook, and
+the EC2 teardown (instance, security group, Elastic IP, key pair, the
+`audit-intelligence-deploy` IAM user).

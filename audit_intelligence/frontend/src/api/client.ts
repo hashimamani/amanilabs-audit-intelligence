@@ -9,6 +9,7 @@ import type {
   Job,
   ReportResult,
   Role,
+  RuleInfo,
   RunSummary,
   UploadResult,
   UserInfo,
@@ -16,10 +17,13 @@ import type {
 
 const BASE_URL = "/api";
 
-let authToken: string | null = null;
+type TokenProvider = () => Promise<string | null>;
 
-export function setAuthToken(token: string | null): void {
-  authToken = token;
+let tokenProvider: TokenProvider = async () => null;
+
+/** Set once at boot: Cognito's ID token when deployed, the local token otherwise. */
+export function setTokenProvider(provider: TokenProvider): void {
+  tokenProvider = provider;
 }
 
 class ApiError extends Error {
@@ -33,7 +37,8 @@ class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {};
-  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+  const token = await tokenProvider();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   if (!(init?.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
@@ -198,6 +203,14 @@ export function login(email: string, password: string): Promise<LoginResult> {
 
 export function getMe(): Promise<UserInfo> {
   return request("/auth/me");
+}
+
+export function listRules(): Promise<RuleInfo[]> {
+  return request("/rules");
+}
+
+export function listDatasets(): Promise<UploadResult[]> {
+  return request("/datasets");
 }
 
 export function listUsers(): Promise<UserInfo[]> {

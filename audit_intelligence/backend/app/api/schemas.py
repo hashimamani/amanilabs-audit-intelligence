@@ -183,3 +183,18 @@ class RunOut(BaseModel):
     severity_counts: dict[str, int]
     rule_counts: dict[str, int]
     error: str | None
+
+
+class RuleThresholdOut(BaseModel):
+    key: str
+    label: str
+    value: float | int
+
+
+class RuleOut(BaseModel):
+    rule_id: str
+    rule_name: str
+    summary: str
+    detail: str
+    signal: str
+    thresholds: list[RuleThresholdOut]

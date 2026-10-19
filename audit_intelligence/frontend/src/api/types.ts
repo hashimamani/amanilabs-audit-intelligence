@@ -171,3 +171,22 @@ export const REQUIRED_UPLOAD_FILES = [
   "guarantors.csv",
   "loan_payments.csv",
 ] as const;
+
+export interface RuleThreshold {
+  key: string;
+  label: string;
+  value: number;
+}
+
+export interface RuleInfo {
+  rule_id: string;
+  rule_name: string;
+  summary: string;
+  detail: string;
+  signal: string;
+  thresholds: RuleThreshold[];
+}
+
+export const STATUSES = ["Open", "In Progress", "Closed"] as const;
+export type CaseStatus = (typeof STATUSES)[number];
+export const SEVERITIES: Severity[] = ["Critical", "High", "Medium", "Low"];

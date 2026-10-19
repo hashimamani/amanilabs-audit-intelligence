@@ -66,7 +66,73 @@ jobs:
 
       - run: npm ci
       - run: npm run lint
+      - run: npm test
       - run: npm run build
+
+  e2e:
+    name: End to end — real backend, real browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The same stack a developer runs locally: DynamoDB Local, the backend in
+    # local auth mode, the app served by Vite, driven by Playwright.
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local:latest
+        ports:
+          - 8000:8000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: audit_intelligence/frontend/package-lock.json
+
+      - name: Install
+        run: |
+          uv sync --frozen
+          npm ci --prefix audit_intelligence/frontend
+          npx --prefix audit_intelligence/frontend playwright install --with-deps chromium
+
+      - name: Start the backend
+        working-directory: audit_intelligence/backend
+        env:
+          APP_ENV: local
+          AUTH_MODE: local
+          DATASET_STORE: local
+          JOB_RUNNER: inline
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          AWS_REGION: eu-west-1
+          AWS_ACCESS_KEY_ID: local
+          AWS_SECRET_ACCESS_KEY: local
+        run: |
+          nohup uv run uvicorn app.main:app --host 127.0.0.1 --port 8011 > /tmp/backend.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8011/health && exit 0
+            sleep 1
+          done
+          echo "backend never became healthy" >&2
+          cat /tmp/backend.log >&2
+          exit 1
+
+      - name: Smoke test
+        working-directory: audit_intelligence/frontend
+        env:
+          CI: 'true'
+          E2E_API_URL: http://127.0.0.1:8011
+        run: npx playwright test
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: audit_intelligence/frontend/playwright-report
+          retention-days: 7
 
   infra:
     name: Infra — typecheck, test, synth (no AWS credentials)
