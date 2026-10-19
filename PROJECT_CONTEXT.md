@@ -1420,7 +1420,7 @@ instead of their real result.
   landing right at or past the old 60s ceiling - exactly the previously-
   failing range, now succeeding.
 
-## 23. Serverless rebuild on AWS — decisions and phase plan (code complete; nothing deployed until the bootstrap)
+## 23. Serverless rebuild on AWS — decisions and phase plan (dev deployed 2026-10-19; prod and the EC2 teardown remain)
 
 Requested directly on 2026-10-19: "this project did not have proper
 infrastructure done in a proper production method ... should run
@@ -1915,6 +1915,56 @@ the budget half-written in the working tree; this picks it up.
   the worker task's typed confirmation); infra typecheck + **41** tests
   including the cdk-nag pass for dev and prod; a real `cdk synth` of the
   prod stage with Docker bundling.
+
+### Dev deployment and first walkthrough (2026-10-19)
+
+Hashim ran `scripts/deploy-identity.sh dev` under a non-root profile and
+the `gh` commands it printed (the account was already bootstrapped). From
+there everything ran from GitHub Actions, nothing from a laptop:
+
+- **Dry run** (`gh workflow run deploy.yml -f stage=dev`, run 39254843234):
+  the OIDC chain held on the first attempt - `sts get-caller-identity`
+  returned `assumed-role/audit-intelligence-deploy-dev/…` - and `cdk diff`
+  listed five new stacks and nothing else.
+- **Deploy** (`-f confirm=dev`, run 39255311493): all five stacks
+  `CREATE_COMPLETE` in 498 s, Docker bundling included. Outputs:
+
+  | Output | Value |
+  |---|---|
+  | `AppUrl` | https://d2tjryyrk52emh.cloudfront.net |
+  | `DistributionId` | `E1DL828U87NH24` |
+  | `TableName` | `audit-intelligence-dev-main` |
+  | `DatasetsBucketName` | `audit-intelligence-dev-datasets-304442552123` |
+  | `AnthropicApiKeySecretName` | `audit-intelligence-dev-anthropic-api-key` |
+  | `UserPoolId` / `UserPoolClientId` | `eu-west-1_UUxp68cLY` / `7fr1mampd69vvb72eqece01imv` |
+  | `ApiEndpoint` | https://mtb78ulm9a.execute-api.eu-west-1.amazonaws.com |
+  | `AlarmTopicArn` | `arn:aws:sns:eu-west-1:304442552123:audit-intelligence-dev-alarms` |
+
+- **Tenant** (`provision-tenant.yml`, run 39256973396): the admin-tasks
+  role invoked the worker, which answered `{"ok": true, "slug":
+  "demo-sacco", …}` in 8 s; Cognito emailed hashmy66@gmail.com the
+  temporary password. The alarm subscription confirmation went to
+  `alarmEmail` in `infra/config/dev.json`, which is admin@amanilabs.co.ke.
+
+**Verified on the real URL before any credential** (built-in browser):
+
+- `/config.json` is served with the dev pool and client ids; the app
+  detects Cognito mode (the "Forgot your password?" link is Cognito-only)
+  and the boot probe `GET /api/auth/me` returns the gateway's 401, so the
+  JWT authorizer is in front of every route.
+- CloudFront returns the full header set: the CSP exactly as the Web stack
+  composes it (`connect-src` = self + `cognito-idp.eu-west-1` + the
+  datasets bucket host), HSTS one year with subdomains, `X-Frame-Options:
+  DENY`, `nosniff`, `strict-origin-when-cross-origin`.
+- SPA routing: a direct hit on `/cases/CASE-0001-0001` serves `index.html`
+  (200, `text/html`); a hit on `/api/does-not-exist` reaches the gateway
+  and gets `{"message":"Unauthorized"}` - the CloudFront Function never
+  rewrites an API path.
+- Cognito SRP from the browser: a sign-in with a wrong password round-trips
+  to `cognito-idp.eu-west-1.amazonaws.com` (a 400 `NotAuthorizedException`,
+  no CSP refusal) and the login page renders it as "Invalid email or
+  password." - the first time the Amplify code path has run against a real
+  pool, and it needed no change.
 
 ### What the next session should do
 
