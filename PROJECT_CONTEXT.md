@@ -378,22 +378,14 @@ pattern behavior for real-world realism, never to tune a metric).
 
 ## 10. Immediate next steps (in order)
 
-1. Register/point a real domain at the pilot's Elastic IP and add HTTPS
-   (ACM if fronted by a load balancer, or Let's Encrypt/Caddy directly on
-   the instance) — deliberately not done in section 18 since there was no
-   domain to attach it to yet.
-2. Provision the real pilot SACCO's tenant on the live server (`ssh` in,
-   `cd audit-intelligence`, `sudo docker compose exec backend python -m
-   app.scripts.create_tenant --slug <slug> --name "<SACCO name>"
-   --admin-email <email> --admin-name "<name>"`) — deliberately skipped
-   during initial deploy since the real SACCO's details weren't decided
-   yet at deploy time.
-3. Fast follows explicitly deferred from Login/RBAC (section 15), pick up
-   only if/when actually needed: self-service signup, forgot-password
-   email flow, a user changing their own password, token revocation
-   before expiry.
+**Superseded 2026-10-19 by the serverless rebuild — see section 23 for the
+current plan and what to do next.** The three items that used to live here
+(domain + HTTPS on the EC2 box, provisioning the pilot tenant on it, the
+Login/RBAC fast-follows) are all absorbed by that rebuild: CloudFront gives
+HTTPS for free, Cognito gives password reset/revocation for free, and the
+EC2 box is being decommissioned rather than improved.
 
-**Low priority / deliberately deferred, not forgotten**: the AWS
+**Superseded by section 23 (kept for the reasoning)**: the AWS
 deployment (section 18) was created by hand via one-off CLI commands -
 no infra-as-code, no CI/CD. Discussed and explicitly decided to leave
 manual for now (SSH in, `git pull`/rsync, `docker compose up -d
@@ -1427,3 +1419,170 @@ instead of their real result.
   ~11.7KB report in 49.0s. Both are real 200s at durations that were
   landing right at or past the old 60s ceiling - exactly the previously-
   failing range, now succeeding.
+
+## 23. Serverless rebuild on AWS — decisions and phase plan (in progress)
+
+Requested directly on 2026-10-19: "this project did not have proper
+infrastructure done in a proper production method ... should run
+serverless in AWS ... improvements across all facets including the UI."
+A full review of the repo and the live UI preceded this; the gaps it
+found, in priority order:
+
+- The pilot's Postgres runs *inside a container on one t3.small with no
+  backups* - one disk failure loses every case. Plain HTTP on a bare IP
+  carries logins and member PII (names, national IDs, phones) unencrypted,
+  which is a Data Protection Act problem for any SACCO sale, not just
+  hygiene. No IaC, no CI, `rsync` deploys, a `docker-compose.override.yml`
+  that exists only on the server, no searchable logs or alarms.
+- Long-running work (`/analysis/run`, the AI endpoints at 30-90s) runs
+  synchronously inside HTTP requests - the nginx 504 in section 22 was a
+  symptom of that design, and it is incompatible with any API gateway.
+  Uploads go to local disk; the demo dataset is found by walking the repo
+  path. Hand-rolled JWT/bcrypt with a well-known seeded admin in code.
+  No schema migrations ("drop the DB" was the strategy). Only filenames
+  are validated on upload. No audit trail of who changed a case. No rate
+  limit or budget on paid Anthropic calls. Unpinned deps; Python 3.14
+  locally vs 3.12 in Docker.
+- UI: a 3-page CRUD app with a top nav. No run-over-run deltas, rules
+  shown as bare codes, no search/sort/pagination (hard-capped at 200),
+  every Critical case shows `100.0` so on-screen ranking is meaningless,
+  bare inputs with no save feedback, no activity history, no triage flow,
+  no upload validation/progress, `Loading...` text, no toasts, no error
+  boundary, zero frontend tests.
+
+### Decisions (locked with the user, do not re-litigate)
+
+1. **DynamoDB** single table, not Aurora Serverless v2. Zero idle cost,
+   no VPC/NAT, no connection-pool pain from Lambda; case rows are already
+   JSON blobs read as a unit. Cost: the ~4 data-layer files are rewritten
+   and ad-hoc SQL is gone (DynamoDB being schemaless also removes the
+   "no migration tool" problem).
+2. **Region `eu-west-1`**, matching Tender Tracker and the billing
+   platform so one operator pattern covers every AmaniLabs product. (The
+   EC2 box is in us-east-1; `af-south-1` was offered for the "data stays
+   in Africa" pitch and declined for now.)
+3. **Cognito** replaces the hand-rolled auth: custom login page kept,
+   groups for `admin`/`auditor`, `custom:tenant_id`, API Gateway JWT
+   authorizer. Password reset, forced change, MFA and revocation - the
+   section 15 fast-follows - come for free.
+4. **Decommission the EC2 pilot and remove every manually created
+   resource** (instance, security group, Elastic IP, key pair, the
+   `audit-intelligence-deploy` IAM user) at the end of the rebuild. No
+   data migration: only demo/smoke tenants ever existed on it (the real
+   SACCO tenant was never provisioned, per section 18).
+5. **Deploys run only from GitHub Actions via OIDC, mirroring
+   `billing-platform` exactly** - a plain CloudFormation deploy identity
+   that can assume the CDK bootstrap roles and nothing else, a script that
+   builds the *immutable* OIDC subject from the numeric GitHub ids, a
+   `workflow_dispatch` deploy guarded by typing the stage name, and CI
+   that synths with no AWS credentials. Nothing is ever deployed from the
+   developer machine (its CLI is the account root user, which cannot
+   assume a role anyway); the one-time `cdk bootstrap` +
+   `scripts/deploy-identity.sh` is run by the user with a non-root
+   administrative identity.
+
+### Target architecture
+
+| Layer | Target |
+|---|---|
+| Frontend | S3 + CloudFront (OAC, HTTPS, `/api/*` behaviour to the API, CSP/HSTS headers) |
+| API | API Gateway HTTP API + one Lambda (FastAPI via Mangum, Powertools logging/tracing); route code barely changes, only the DB/auth/storage layers do |
+| Long work | SQS → worker Lambda (15 min, 2 GB) + a job status record; the UI polls with real progress. Kills the 504 class permanently |
+| Auth | Cognito user pool, JWT authorizer at the gateway |
+| Data | DynamoDB single table, PITR + deletion protection in prod, KMS |
+| Files | S3 (SSE-KMS, presigned browser upload - Lambda's 6 MB limit makes this mandatory, lifecycle expiry on raw uploads for data minimisation) |
+| Secrets | SSM SecureString |
+| Ops | CloudWatch dashboard, alarms (5xx, DLQ depth, worker errors), log retention, X-Ray |
+| IaC/CI | CDK (TypeScript, cdk-nag) + GitHub Actions |
+
+Rule engine, case builder and the AI grounding layer are untouched - they
+are pure pandas/dicts. Idle cost well under $5/month vs ~$20 now.
+
+### Phases (each ends green and shippable)
+
+- **Phase 0 - foundations (done, see below).**
+- **Phase 1 - backend decoupled from the box, no AWS yet**: DynamoDB data
+  layer (tested with moto), S3-or-local dataset store, async job model
+  (jobs record + worker entrypoint runnable locally *and* as a Lambda
+  handler), Cognito-JWKS auth dependency with a local mock issuer,
+  Powertools structured logging, upload column-schema validation, case
+  activity log. The seeded default admin leaves with the old auth. Gate:
+  full suite green against moto; `/analysis/run` returns a job id and
+  completes via the worker locally.
+- **Phase 2 - infra**: CDK stacks Data, Auth, Api (+SQS/worker/DLQ), Web,
+  Ops; cdk-nag clean; assertion tests; the user runs the bootstrap; CI
+  deploys dev. Gate: login → run → cases → AI chart on the dev CloudFront
+  URL.
+- **Phase 3 - frontend**: Cognito login (current look kept), app shell
+  with sidebar + run selector, TanStack Table case list (search/sort/
+  paginate), job progress component, case triage flow (next/prev, inline
+  status with toast + activity timeline), dashboard deltas vs previous
+  run, rule names everywhere + a plain-English Rule Catalogue page,
+  skeletons/toasts/error boundary, vitest + one Playwright smoke. Gate:
+  walked in a real browser on dev.
+- **Phase 4 - hardening + cutover**: per-tenant AI budget/rate limit, S3
+  lifecycle, tenant provisioning as an admin command, `delete_tenant`
+  (right to erasure), prod stacks behind the typed confirmation, custom
+  domain when one exists, runbook, EC2 + manual resources removed.
+
+### Phase 0 - foundations (done 2026-10-19)
+
+- **Python**: `pyproject.toml` + `uv.lock` are the source of truth;
+  `requirements.txt` is now *generated* (`uv export --frozen --no-dev
+  --no-hashes --no-emit-project`) for the Docker image and, later, the
+  Lambda bundle - CI fails if the two drift. `.python-version` pins
+  **3.13**, the same interpreter the Lambda runtime and the Dockerfile
+  (`python:3.13-slim`, was 3.12) use. The local venv had been on 3.14,
+  whose Homebrew build was broken (`pyexpat` dlopen failure made even
+  `pip freeze` crash); it was moved aside to `.venv-old-py314` (ignored)
+  and recreated. Versions were pinned to what the suite already ran on
+  (pandas 3.0.x, FastAPI 0.14x, anthropic 0.12x `<1` - the 1.x major is a
+  Phase 1 upgrade, not a silent one). `faker` moved to the dev group: only
+  `generate_data.py` imports it, the engine never does.
+- **ruff** (`E`, `F`; `E501` ignored rather than reformat 250 lines;
+  `E402` allowed in tests, which set up the app before importing it).
+  Two real findings fixed: `rules/base.py` annotated `evaluate()` with a
+  `"SaccoDataset"` string that was never imported (harmless at runtime
+  because it was a string, wrong as documentation - now a real import),
+  and an unused `prof = member_profiles[member_id]` in
+  `generate_data.py`'s `create_loan` (removed; it made no `random.*`
+  call, so every seeded draw - and therefore `ground_truth.json` - is
+  byte-identical, which the 52/54 test re-confirmed).
+- **infra/** (CDK, TypeScript, ESM, `tsx`): `lib/config.ts` validates
+  `infra/config/<stage>.json` with zod at synth (region, optional pinned
+  account - required for prod - alarm email, log retention); `prod.json`
+  is gitignored, `prod.json.example` committed. `lib/app.ts`
+  (`defineStacks`) is the single place stacks are declared so `bin/app.ts`
+  and the tests synthesise the same thing - empty until Phase 2. cdk-nag's
+  AwsSolutions pack is wired through CDK's validation framework in both
+  the app and `test/nag.test.ts`, whose first test plants a non-compliant
+  bucket and asserts `AwsSolutions-S1`/`S10` are caught - a silently
+  disabled pack is otherwise indistinguishable from a clean app. 15
+  tests, `npm run synth` clean ("This app contains no stacks").
+- **Deploy identity** (`infra/bootstrap/deploy-identity.yaml`,
+  `scripts/deploy-identity.sh`, `docs/DEPLOYING.md`) copied from
+  `billing-platform` with one deliberate simplification: a single deploy
+  role, no separate publish-UI role, because the web bundle will be
+  published by CDK's `BucketDeployment` inside the same deployment. The
+  script refuses to run as root and prints the `gh` commands that create
+  the GitHub environment and set `AWS_DEPLOY_ROLE_ARN`/`AWS_REGION` on it.
+- **GitHub Actions**: `ci.yml` (backend: `uv sync --frozen`, ruff, pytest,
+  requirements.txt-matches-lock; frontend: `npm ci`, oxlint, `npm run
+  build`; infra: typecheck, vitest, `cdk synth` with no credentials) and
+  `deploy.yml` (`workflow_dispatch` with stage + typed confirmation, OIDC,
+  `sts get-caller-identity`, `cdk diff`, deploy only when the confirmation
+  matches). A dry-run dispatch proves the whole identity chain before
+  Phase 2 has anything to deploy. `.nvmrc` = 22, matching the frontend
+  Dockerfile.
+- **Verified**: `uv run pytest` 53/53 on Python 3.13 with the newly
+  pinned stack (including SQLAlchemy 2.1.x and pandas 3.0.6 - no code
+  change needed); `uv run ruff check .` clean; `docker build` of the
+  backend image on `python:3.13-slim` succeeds and reports the same pinned
+  versions inside the container; infra typecheck + 15 tests + synth clean.
+  CI itself has not run yet - it fires on the first push of this work.
+
+### What the next session should do
+
+Phase 1, starting with the DynamoDB data layer and the async job model.
+Before touching `app/core/ai.py` for the anthropic 1.x upgrade, read the
+Claude API reference skill - the SDK's 1.x line changed client surface.

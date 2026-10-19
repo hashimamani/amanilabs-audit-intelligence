@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Deploy identity for Audit Intelligence: a role that can assume the CDK
+  bootstrap roles and do nothing else.
+
+# Why this is plain CloudFormation rather than CDK
+# ------------------------------------------------
+# It is the chicken that lays the egg. CDK deploys by assuming the bootstrap
+# roles, and this template creates the identity permitted to assume them, so it
+# cannot itself be deployed that way. It is applied once, by a human with
+# administrative (non-root) credentials, and then those credentials are not
+# needed again.
+#
+# What this role can do
+# ---------------------
+# Two things: assume the CDK bootstrap roles in one region, and read the
+# bootstrap version parameter. Every permission that actually creates
+# infrastructure lives in the CloudFormation execution role that `cdk bootstrap`
+# already created, which only CloudFormation can use.
+#
+# So a leaked credential for this role cannot read a SACCO's uploaded data,
+# cannot read a secret, and cannot call DynamoDB at all. It can start a
+# deployment of this repository, which is recoverable.
+#
+# One role, not two: the web bundle is published by CDK's BucketDeployment as
+# part of the same deployment, so there is no separate publish identity to keep
+# apart from the deploy identity.
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedValues: [dev, prod]
+    Description: Which stage this identity deploys. One role per stage, never shared.
+
+  TrustMode:
+    Type: String
+    AllowedValues: [GitHubOidc, Account]
+    Default: GitHubOidc
+    Description: >-
+      GitHubOidc trusts a GitHub Actions workflow with no long-lived keys.
+      Account trusts IAM principals in this account, so a person can assume the
+      role from their own CLI — note that this means an IAM *user*, because the
+      account root user cannot assume a role at all ("Roles may not be assumed
+      by root accounts").
+
+  GitHubSubject:
+    Type: String
+    Default: ''
+    Description: >-
+      Required when TrustMode is GitHubOidc. The *immutable* subject claim,
+      carrying numeric owner and repository ids, e.g.
+      repo:owner@17795741/amanilabs-audit-intelligence@123456789:environment:dev
+      — a subject written from a standard guide fails with a misleading "Not
+      authorized to perform sts:AssumeRoleWithWebIdentity". The script
+      scripts/deploy-identity.sh builds it; see docs/DEPLOYING.md.
+
+  OidcProviderArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Required when TrustMode is GitHubOidc. The existing GitHub OIDC provider in
+      this account. An account may hold only one per issuer, so this references
+      it rather than creating one.
+
+  DeployRegion:
+    Type: String
+    Default: eu-west-1
+    Description: The region the platform deploys into, and the only one this role reaches.
+
+  BootstrapQualifier:
+    Type: String
+    Default: hnb659fds
+    Description: CDK bootstrap qualifier. The default unless `cdk bootstrap` was given another.
+
+Conditions:
+  UsesGitHub: !Equals [!Ref TrustMode, 'GitHubOidc']
+
+Rules:
+  GitHubNeedsSubjectAndProvider:
+    RuleCondition: !Equals [!Ref TrustMode, 'GitHubOidc']
+    Assertions:
+      - Assert: !Not [!Equals [!Ref GitHubSubject, '']]
+        AssertDescription: GitHubOidc needs GitHubSubject, or the role would trust every repository.
+      - Assert: !Not [!Equals [!Ref OidcProviderArn, '']]
+        AssertDescription: GitHubOidc needs OidcProviderArn.
+
+Resources:
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'audit-intelligence-deploy-${Stage}'
+      Description: !Sub 'Deploys Audit Intelligence into ${Stage}. Can assume the CDK bootstrap roles and nothing else.'
+      # An hour is longer than any deployment here takes and short enough that a
+      # leaked session is not a standing one.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument: !If
+        - UsesGitHub
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Federated: !Ref OidcProviderArn
+              Action: sts:AssumeRoleWithWebIdentity
+              Condition:
+                StringEquals:
+                  # Both conditions matter. Without the audience check the role
+                  # would accept a token minted for another service; without the
+                  # exact subject it would accept a workflow from any repository
+                  # on GitHub.
+                  'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com'
+                  'token.actions.githubusercontent.com:sub': !Ref GitHubSubject
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                # `:root` in a trust policy names the account, not the root user,
+                # which is barred from AssumeRole entirely. An IAM user or role
+                # in this account may assume it if its own policy allows.
+                AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+              Action: sts:AssumeRole
+              Condition:
+                Bool:
+                  'aws:MultiFactorAuthPresent': 'true'
+      Policies:
+        - PolicyName: assume-cdk-bootstrap-roles
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AssumeCdkBootstrapRoles
+                Effect: Allow
+                Action: sts:AssumeRole
+                # One region. A role for dev cannot reach production's roles even
+                # if somebody points it at the wrong stage.
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cdk-${BootstrapQualifier}-*-${AWS::AccountId}-${DeployRegion}'
+              - Sid: ReadBootstrapVersion
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${DeployRegion}:${AWS::AccountId}:parameter/cdk-bootstrap/${BootstrapQualifier}/version'
+      Tags:
+        - Key: Project
+          Value: AuditIntelligence
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Environment
+          Value: !Ref Stage
+
+Outputs:
+  DeployRoleArn:
+    Description: Assume this to deploy. Put it in the GitHub environment's variables.
+    Value: !GetAtt DeployRole.Arn
+    Export:
+      Name: !Sub 'audit-intelligence-deploy-role-${Stage}'
+
+  ProfileSnippet:
+    Description: With TrustMode=Account, paste into ~/.aws/config to deploy from a machine.
+    Value: !Sub |
+      [profile audit-intelligence-${Stage}]
+      role_arn = ${DeployRole.Arn}
+      source_profile = <an IAM user profile, never root>
+      mfa_serial = <your MFA device ARN>
+      region = ${DeployRegion}

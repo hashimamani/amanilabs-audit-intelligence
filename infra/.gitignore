@@ -1,0 +1,5 @@
+node_modules/
+cdk.out/
+cdk.context.json
+# Carries a real account id; only prod.json.example is committed.
+config/prod.json

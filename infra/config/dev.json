@@ -1,0 +1,5 @@
+{
+  "region": "eu-west-1",
+  "alarmEmail": "admin@amanilabs.co.ke",
+  "logRetentionDays": 30
+}

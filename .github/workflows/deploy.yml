@@ -1,0 +1,92 @@
+name: deploy
+
+# Deploying is a decision, not a consequence of merging. It runs when somebody
+# asks for it, names the stage, and — through the GitHub environment — is
+# approved by whoever is allowed to approve it.
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Which stage to deploy
+        type: choice
+        options: [dev, prod]
+        default: dev
+        required: true
+      confirm:
+        description: >-
+          Type the stage name to deploy. Leave empty for a dry run, which stops
+          after showing the diff.
+        type: string
+        default: ''
+        required: false
+
+# No long-lived AWS keys exist anywhere in this repository. The job mints a
+# short-lived credential from GitHub's OIDC token, which is what `id-token:
+# write` is for.
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # One deployment per stage at a time. Two CloudFormation updates racing on
+  # one stack is a failed deployment at best.
+  group: deploy-${{ inputs.stage }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.stage }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - run: npm ci
+        working-directory: infra
+
+      # Verified again here rather than trusted from CI. This job can be
+      # dispatched against any commit, including one that never saw a pull
+      # request.
+      - run: npm run typecheck && npm test
+        working-directory: infra
+
+      - name: Assume the deploy role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: audit-intelligence-deploy-${{ inputs.stage }}-${{ github.run_id }}
+
+      # Proves the whole chain — GitHub's OIDC token, the trust policy, the
+      # bootstrap roles — without changing anything. A dry run stops here.
+      - name: Confirm which identity was assumed
+        run: aws sts get-caller-identity
+
+      - name: Show what will change
+        run: npx cdk diff --context stage=${{ inputs.stage }} || true
+        working-directory: infra
+
+      - name: Deploy
+        # Guarded by a typed confirmation rather than by a required reviewer,
+        # which GitHub does not offer for private repositories on the free
+        # plan. A dispatch with the box left empty is a dry run.
+        #
+        # `--require-approval never` is then safe, because the approval is the
+        # input above. A prompt in a non-interactive runner would simply hang.
+        if: inputs.confirm == inputs.stage
+        run: npx cdk deploy --all --context stage=${{ inputs.stage }} --require-approval never
+        working-directory: infra
+
+      - name: Say that nothing was deployed
+        if: inputs.confirm != inputs.stage
+        run: |
+          echo "### Dry run — nothing was deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The role was assumed and the diff is above. To deploy, dispatch" >> "$GITHUB_STEP_SUMMARY"
+          echo 'again and type `${{ inputs.stage }}` into the confirm box.' >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Lambda targets python3.13 and node22 builds the web bundle. CI runs the
+  # same versions so test behaviour and runtime behaviour cannot diverge.
+  NODE_VERSION: '22'
+
+jobs:
+  backend:
+    name: Backend — lint, test, lockfile
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # `.python-version` pins the interpreter; uv installs it if the runner lacks it.
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Test
+        run: uv run pytest audit_intelligence/backend/tests -q
+
+      # requirements.txt is generated from uv.lock for the Docker image and the
+      # Lambda bundle. A hand edit to either file would otherwise go unnoticed
+      # until a deploy ran with different versions than the tests did.
+      - name: requirements.txt matches uv.lock
+        run: |
+          uv export --frozen --no-dev --no-hashes --no-emit-project --quiet -o /tmp/requirements.txt
+          diff -u requirements.txt /tmp/requirements.txt
+
+  frontend:
+    name: Frontend — lint, typecheck, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: audit_intelligence/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: audit_intelligence/frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  infra:
+    name: Infra — typecheck, test, synth (no AWS credentials)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      # No AWS credentials are configured in this job on purpose: synth of the
+      # dev stage needs none, and that is also what keeps this job from reaching
+      # real AWS even by accident.
+      - run: npm run synth

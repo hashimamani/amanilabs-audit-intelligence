@@ -8,6 +8,7 @@ without a code deploy. Defaults live in rules/config.py.
 
 from abc import ABC, abstractmethod
 from app.domain.models import Flag
+from app.rules.dataset import SaccoDataset
 
 
 class Rule(ABC):
@@ -18,6 +19,6 @@ class Rule(ABC):
         self.config = config
 
     @abstractmethod
-    def evaluate(self, dataset: "SaccoDataset") -> list[Flag]:
+    def evaluate(self, dataset: SaccoDataset) -> list[Flag]:
         """Run this rule against the full dataset and return any flags."""
         raise NotImplementedError

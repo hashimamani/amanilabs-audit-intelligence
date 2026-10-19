@@ -1,4 +1,5 @@
-FROM python:3.12-slim
+# Same interpreter the Lambda runtime (python3.13) and .python-version use.
+FROM python:3.13-slim
 
 # app/core/datasets.py resolves the "default" dataset_id relative to the
 # repo layout (backend two levels under the repo root, synthetic_sacco_data

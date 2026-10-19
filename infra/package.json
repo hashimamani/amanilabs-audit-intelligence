@@ -1,0 +1,30 @@
+{
+  "name": "@audit-intelligence/infra",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AWS CDK application defining every resource Audit Intelligence runs on",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "synth": "cdk synth --quiet",
+    "diff": "cdk diff",
+    "deploy": "cdk deploy --all --require-approval broadening"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.273.0",
+    "cdk-nag": "^3.0.2",
+    "constructs": "^10.8.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "aws-cdk": "^2.1145.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.2",
+    "vitest": "^5.0.5"
+  }
+}

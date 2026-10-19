@@ -1,8 +1,15 @@
-.venv/
+.venv*/
 __pycache__/
 *.pyc
 *.db
 .DS_Store
 .pytest_cache/
+.ruff_cache/
 audit_intelligence/backend/data/uploads/
 .env
+.idea/
+node_modules/
+cdk.out/
+*.tsbuildinfo
+# Carries a real account id; only prod.json.example is committed.
+infra/config/prod.json

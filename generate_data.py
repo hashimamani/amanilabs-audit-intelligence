@@ -228,7 +228,6 @@ def create_loan(member_id, approved_by, approval_dt, amount=None, status="Active
         # nothing to do with the scenario being tested.
         approval_dt = approval_dt.replace(hour=random.randint(8, 16),
                                            minute=random.randint(0, 59))
-    prof = member_profiles[member_id]
     if amount is None:
         amount = round(random.uniform(10000, 300000), -2)
     term_months = random.choice([6, 12, 18, 24, 36])
