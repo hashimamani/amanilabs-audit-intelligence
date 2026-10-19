@@ -1942,9 +1942,15 @@ there everything ran from GitHub Actions, nothing from a laptop:
 
 - **Tenant** (`provision-tenant.yml`, run 39256973396): the admin-tasks
   role invoked the worker, which answered `{"ok": true, "slug":
-  "demo-sacco", …}` in 8 s; Cognito emailed hashmy66@gmail.com the
-  temporary password. The alarm subscription confirmation went to
-  `alarmEmail` in `infra/config/dev.json`, which is admin@amanilabs.co.ke.
+  "demo-sacco", …}` in 8 s. That first tenant was created with a gmail
+  administrator; the coordinating session erased it with
+  `delete-tenant.yml` (run 39261910658: `users_deleted 1, items_deleted
+  2` - the first real exercise of the erasure path) and provisioned it
+  again (run 39262024841) with **admin@amanilabs.co.ke**, Hashim's
+  standing address for first admins, alarms and operator mail on every
+  AmaniLabs product. Cognito emailed that address the temporary password.
+  The alarm subscription confirmation went to the same address
+  (`alarmEmail` in `infra/config/dev.json`).
 
 **Verified on the real URL before any credential** (built-in browser):
 
