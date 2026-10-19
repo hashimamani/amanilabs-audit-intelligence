@@ -1679,11 +1679,106 @@ engine, case builder and the AI grounding prompts did not change.
   the summary index is fine at hundreds of cases per run), per-tenant AI
   budget (Phase 4).
 
+### Phase 2 - infrastructure as code (done 2026-10-19, not yet deployed)
+
+Five CDK stacks per stage in `infra/lib/stacks/`, wired in `lib/app.ts`
+(`defineStacks`) so `bin/app.ts` and the tests synthesise the same thing:
+
+- **Data**: the table (`PK/SK`, `GSI1` with an INCLUDE projection - the
+  attribute list is asserted equal to `GSI1_PROJECTED` in the backend's
+  `db/table.py` by `test/stacks.test.ts`, so the two cannot drift), the
+  datasets bucket (literal name `audit-intelligence-<stage>-datasets-
+  <account>`, SSE-S3, TLS-only, CORS for presigned PUT, raw uploads expired
+  after `datasetRetentionDays`), the access-logs bucket, and the Anthropic
+  key as a Secrets Manager secret created holding `unset` - the backend
+  reads it at cold start (`settings._anthropic_api_key`) and treats
+  `unset` as "AI not configured", so a fresh deploy degrades cleanly.
+  Prod: PITR on, deletion protection, RETAIN, termination protection. Dev:
+  disposable.
+- **Auth**: Cognito pool, no self sign-up, `custom:tenant` immutable,
+  groups `admin`/`auditor`, 12-char password policy with symbols, MFA
+  `REQUIRED` when `requireMfa` (prod) else `OPTIONAL`, Essentials plan,
+  web client with SRP only, 1 h tokens, 30-day refresh, revocation on.
+- **Api**: one HTTP API, every route under `/api` behind a Cognito JWT
+  authorizer (`jwtAudience` = the web client, i.e. the ID token), two
+  Python 3.14 arm64 functions from one asset (`constructs/
+  python-function.ts`: explicit role scoped to its own log group, JSON
+  logs, X-Ray, an error alarm each; `backendCode()` stages
+  `requirements.txt` + `app/` + the demo CSVs *without* `ground_truth.*`
+  into `infra/.lambda-src` and pip-installs `manylinux2014_aarch64`
+  wheels inside the Lambda build image so the bundle is identical from a
+  Mac or an x86 runner), the jobs queue (visibility 12 min > the worker's
+  10 min) with a dead-letter queue after 2 receives, the worker fed one
+  message at a time with `maxConcurrency` 5 (an event-source setting, not
+  reserved concurrency - the account quota that bit the billing platform
+  cannot bite here). Grants are explicit: table + `index/GSI1`, no `Scan`;
+  `s3:GetObject`/`PutObject` on `tenants/*` only (acknowledged by literal
+  ARN); Cognito admin actions on the pool without `AdminDeleteUser` or
+  `AdminSetUserPassword`; secret read. Alarms: API 5xx, API p99 > 5 s,
+  each function's errors, DLQ depth, table throttles. Function names are
+  fixed (`audit-intelligence-<stage>-api|worker`) so an operator workflow
+  can invoke the worker by name.
+- **Web**: private bucket behind CloudFront (OAC, HTTPS redirect, HTTP/2+3,
+  price class 200 for the Nairobi edge), a CloudFront Function for SPA
+  routing on the default behaviour only (so an API 404 is never rewritten
+  into `index.html`), `/api/*` to the gateway with caching disabled and
+  `AllViewerExceptHostHeader`, CSP/HSTS headers whose `connect-src` admits
+  only Cognito and the datasets bucket host, and a `BucketDeployment` of
+  `frontend/dist` plus a generated `config.json` (stage, region, pool id,
+  client id, `/api`) so one build is valid in every stage. A placeholder
+  page is deployed when `dist/` is absent so synth works in a clean
+  checkout.
+- **Ops**: SNS topic + email subscription, one composite alarm over every
+  alarm, a dashboard.
+- **cdk-nag** (AwsSolutions, v3 `Validations` API): every finding is
+  fixed or acknowledged at the construct that causes it with a reason -
+  COG2/COG3/COG8 on the pool, SQS3 on the DLQ, SMG4 on the secret, DDB3
+  in dev only, CFR1/2/4 on the distribution, SNS2 on the alarm topic
+  (CloudWatch cannot publish to a topic encrypted with the AWS-managed
+  key), the log-stream and X-Ray wildcards on each function role, and
+  the eight library-generated wildcards plus L1/IAM4 on CDK's own
+  `BucketDeployment` function. `scripts/nag-report.ts` prints findings
+  with construct paths when the assertion in `test/nag.test.ts` fails.
+  **Python 3.14**: cdk-nag's L1 flagged 3.13 as not the latest runtime;
+  rather than acknowledge it, the whole backend moved to 3.14 via a
+  uv-managed interpreter (`uv python install 3.14` - the Homebrew 3.14
+  build on this machine is broken, the uv one is not), after confirming
+  every compiled dependency publishes cp314 aarch64 wheels. 78 backend
+  tests, the Docker image and the Lambda bundle all run on 3.14 now.
+- **Operator path without laptop credentials**: `infra/bootstrap/
+  deploy-identity.yaml` now also creates `audit-intelligence-admin-
+  tasks-<stage>`, trusted by the GitHub environment `admin-tasks-<stage>`
+  and allowed only `lambda:InvokeFunction` on the worker. `.github/
+  workflows/provision-tenant.yml` invokes the worker with `{"admin_task":
+  "create_tenant", ...}`; `worker_handler.py` creates the tenant and its
+  first admin (Cognito emails the temporary password). Same shape as
+  Tender Tracker's `seed-admin`.
+- **Verified**: `npm run typecheck`; 38 infra tests including the nag
+  probe and a full nag pass for dev and prod; `cfn-lint` clean on the
+  identity template; 78 backend tests on Python 3.14; the backend Docker
+  image on `python:3.14-slim`; a real `cdk synth --context stage=dev`
+  with Docker bundling - five templates, a 179 MB Lambda asset holding 70
+  aarch64 shared objects and the demo CSVs without the ground truth.
+  Two things it took: (1) pip's `--platform` does not widen a single
+  manylinux tag to the ones beneath it reliably - numpy ships
+  `manylinux_2_28`, cffi ships `manylinux2014`, and asking for either
+  alone refused the other - so the bundling command lists every aarch64
+  manylinux tag Lambda's AL2023 (glibc 2.34) can run; (2) an environment-
+  agnostic synth renders the CDK assets bucket ARN with
+  `<AWS::Partition>` and a pinned-account synth renders the literal `aws`
+  partition, so the BucketDeployment acknowledgement names both forms.
+  `uvicorn[standard]` became plain `uvicorn`: uvloop/httptools/
+  watchfiles/websockets are dev-server extras that were only adding
+  weight to the bundle. **Nothing is deployed**: the
+  user runs `cdk bootstrap` + `scripts/deploy-identity.sh dev` with a
+  non-root identity (docs/DEPLOYING.md), then `gh workflow run
+  deploy.yml -f stage=dev -f confirm=dev`.
+
 ### What the next session should do
 
-Phase 2: the CDK stacks (Data: table with the keys in `db/table.py`,
-datasets bucket, KMS; Auth: Cognito pool with `custom:tenant`, groups
-`admin`/`auditor`, no self sign-up; Api: HTTP API + JWT authorizer +
-Mangum Lambda + SQS + worker Lambda + DLQ; Web: S3 + CloudFront with
-`/api/*`; Ops: alarms, dashboard), cdk-nag clean, assertion tests, then
-the user runs the bootstrap and CI deploys dev.
+If dev is bootstrapped: dispatch the deploy, confirm the alarm email, put
+the Anthropic key in, provision a tenant, then Phase 3 (the frontend:
+Cognito login against `config.json`, app shell, TanStack Table case list,
+job progress, triage flow, activity timeline, dashboard deltas, rule
+catalogue, tests). If not, Phase 3 can start regardless - everything it
+needs locally works against the local auth mode.

@@ -72,6 +72,7 @@ OWNER_ID="$(gh api "users/$OWNER" --jq .id)"
 REPO_ID="$(gh api "repos/$REPO" --jq .id)"
 
 DEPLOY_SUBJECT="repo:${OWNER}@${OWNER_ID}/${NAME}@${REPO_ID}:environment:${STAGE}"
+ADMIN_SUBJECT="repo:${OWNER}@${OWNER_ID}/${NAME}@${REPO_ID}:environment:admin-tasks-${STAGE}"
 
 OIDC_ARN="$(aws_cli iam list-open-id-connect-providers \
   --query "OpenIDConnectProviderList[?contains(Arn,'token.actions.githubusercontent.com')].Arn | [0]" \
@@ -91,6 +92,7 @@ echo "region       $REGION"
 echo "stage        $STAGE"
 echo "repository   $REPO"
 echo "deploy sub   $DEPLOY_SUBJECT"
+echo "admin sub    $ADMIN_SUBJECT"
 echo "oidc         $OIDC_ARN"
 echo
 
@@ -103,11 +105,14 @@ aws_cli cloudformation deploy \
     "Stage=$STAGE" \
     'TrustMode=GitHubOidc' \
     "GitHubSubject=$DEPLOY_SUBJECT" \
+    "AdminTasksSubject=$ADMIN_SUBJECT" \
     "OidcProviderArn=$OIDC_ARN" \
     "DeployRegion=$REGION"
 
 DEPLOY_ROLE="$(aws_cli cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
   --query "Stacks[0].Outputs[?OutputKey=='DeployRoleArn'].OutputValue | [0]" --output text)"
+ADMIN_ROLE="$(aws_cli cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+  --query "Stacks[0].Outputs[?OutputKey=='AdminTasksRoleArn'].OutputValue | [0]" --output text)"
 
 cat <<SUMMARY
 
@@ -116,6 +121,10 @@ Done. Now tell GitHub about it:
   gh api --method PUT "repos/$REPO/environments/$STAGE" >/dev/null
   gh variable set AWS_DEPLOY_ROLE_ARN --repo $REPO --env $STAGE --body "$DEPLOY_ROLE"
   gh variable set AWS_REGION          --repo $REPO --env $STAGE --body "$REGION"
+
+  gh api --method PUT "repos/$REPO/environments/admin-tasks-$STAGE" >/dev/null
+  gh variable set AWS_ADMIN_TASKS_ROLE_ARN --repo $REPO --env admin-tasks-$STAGE --body "$ADMIN_ROLE"
+  gh variable set AWS_REGION               --repo $REPO --env admin-tasks-$STAGE --body "$REGION"
 
 The environment is what the trust policy pins the subject to, so a workflow run
 outside it cannot assume the role however it is triggered. Add a required

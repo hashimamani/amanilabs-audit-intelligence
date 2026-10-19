@@ -9,7 +9,6 @@ anyio==4.15.1
     #   anthropic
     #   httpx
     #   starlette
-    #   watchfiles
 aws-lambda-powertools==3.36.0
     # via audit-intelligence
 bcrypt==5.0.0
@@ -42,8 +41,6 @@ h11==0.16.0
     #   uvicorn
 httpcore==1.0.9
     # via httpx
-httptools==0.9.0
-    # via uvicorn
 httpx==0.28.1
     # via anthropic
 idna==3.20
@@ -83,12 +80,8 @@ python-dateutil==2.9.0.post0
     # via
     #   botocore
     #   pandas
-python-dotenv==1.2.4
-    # via uvicorn
 python-multipart==0.0.32
     # via audit-intelligence
-pyyaml==6.0.3
-    # via uvicorn
 s3transfer==0.19.2
     # via boto3
 six==1.17.0
@@ -118,9 +111,3 @@ urllib3==2.8.0
     # via botocore
 uvicorn==0.54.0
     # via audit-intelligence
-uvloop==0.23.0 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
-    # via uvicorn
-watchfiles==1.3.0
-    # via uvicorn
-websockets==17.2
-    # via uvicorn

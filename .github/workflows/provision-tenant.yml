@@ -1,0 +1,74 @@
+name: provision tenant
+
+# Creates a SACCO's tenant and its first administrator by asking the deployed
+# worker function to do it. Nothing here touches the table or Cognito
+# directly: the role this job assumes can invoke that one function and
+# nothing else, and Cognito emails the administrator their temporary password.
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Which stage
+        type: choice
+        options: [dev, prod]
+        default: dev
+        required: true
+      slug:
+        description: URL-safe tenant identifier, fixed for life (e.g. mwalimu-sacco)
+        type: string
+        required: true
+      name:
+        description: Display name (e.g. Mwalimu SACCO)
+        type: string
+        required: true
+      admin_email:
+        description: First administrator's email address
+        type: string
+        required: true
+      admin_name:
+        description: First administrator's full name
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: admin-tasks-${{ inputs.stage }}
+    steps:
+      - name: Assume the admin-tasks role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ADMIN_TASKS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: audit-intelligence-provision-${{ inputs.stage }}-${{ github.run_id }}
+
+      - name: Ask the worker to create the tenant
+        env:
+          PAYLOAD: >-
+            {"admin_task": "create_tenant",
+             "slug": ${{ toJSON(inputs.slug) }},
+             "name": ${{ toJSON(inputs.name) }},
+             "admin_email": ${{ toJSON(inputs.admin_email) }},
+             "admin_name": ${{ toJSON(inputs.admin_name) }}}
+        run: |
+          aws lambda invoke \
+            --function-name "audit-intelligence-${{ inputs.stage }}-worker" \
+            --cli-binary-format raw-in-base64-out \
+            --payload "$PAYLOAD" \
+            response.json >/dev/null
+          cat response.json
+          echo
+          python3 - <<'PY'
+          import json, sys
+          body = json.load(open("response.json"))
+          if isinstance(body, dict) and body.get("ok"):
+              print(f"### Tenant created\n\n`{body['slug']}` — {body['name']}\n\nAdministrator {body['admin_email']} has been emailed a temporary password.", file=open(__import__('os').environ["GITHUB_STEP_SUMMARY"], "a"))
+          else:
+              print(f"::error::{body}")
+              sys.exit(1)
+          PY

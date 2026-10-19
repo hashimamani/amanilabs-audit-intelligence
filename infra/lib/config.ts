@@ -13,31 +13,29 @@ export const stageSchema = z.enum(STAGES);
  * Everything that differs between a dev and a prod deployment lives in
  * `infra/config/<stage>.json` and is validated here, before any construct
  * exists, so a bad value fails at synth with a readable message.
+ *
+ * The account is pinned for every stage, not only prod: bucket names embed
+ * it (S3 names are global), the cdk-nag acknowledgements name those buckets
+ * literally, and a deploy therefore cannot land in whichever account the
+ * CLI happens to hold.
  */
-export const deployConfigSchema = z
-  .strictObject({
-    stage: stageSchema,
-    region: z
-      .string()
-      .regex(/^[a-z]{2}-[a-z]+-\d$/u, 'region must look like eu-west-1')
-      .default('eu-west-1'),
-    /** Pinned for prod so a deploy cannot land in whichever account the CLI happens to hold. */
-    account: z.string().regex(/^\d{12}$/u, 'account must be the 12-digit account id').optional(),
-    /** Receives every CloudWatch alarm. AWS emails a confirmation that must be clicked. */
-    alarmEmail: z.email(),
-    logRetentionDays: z
-      .union([z.literal(7), z.literal(14), z.literal(30), z.literal(60), z.literal(90), z.literal(180), z.literal(365)])
-      .default(30),
-  })
-  .superRefine((config, ctx) => {
-    if (config.stage === 'prod' && config.account === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['account'],
-        message: 'prod must pin "account" to the 12-digit account id',
-      });
-    }
-  });
+export const deployConfigSchema = z.strictObject({
+  stage: stageSchema,
+  region: z
+    .string()
+    .regex(/^[a-z]{2}-[a-z]+-\d$/u, 'region must look like eu-west-1')
+    .default('eu-west-1'),
+  account: z.string().regex(/^\d{12}$/u, 'account must be the 12-digit account id'),
+  /** Receives every CloudWatch alarm. AWS emails a confirmation that must be clicked. */
+  alarmEmail: z.email(),
+  logRetentionDays: z
+    .union([z.literal(7), z.literal(14), z.literal(30), z.literal(60), z.literal(90), z.literal(180), z.literal(365)])
+    .default(30),
+  /** Every sign-in needs an authenticator app. Optional (enrol if you like) when false. */
+  requireMfa: z.boolean().default(false),
+  /** Raw uploaded CSVs are deleted this many days after upload; the cases built from them stay. */
+  datasetRetentionDays: z.number().int().min(1).max(3650).default(30),
+});
 
 export type DeployConfig = z.infer<typeof deployConfigSchema>;
 
@@ -104,11 +102,12 @@ export const stackName = (config: DeployConfig, part: string): string =>
 export const resourceName = (config: DeployConfig, suffix: string): string =>
   `audit-intelligence-${config.stage}-${suffix}`;
 
-export function stackEnv(config: DeployConfig): { account?: string; region: string } {
-  return {
-    ...(config.account !== undefined && { account: config.account }),
-    region: config.region,
-  };
+/** S3 names are global, so the account id keeps two accounts from colliding. */
+export const datasetsBucketName = (config: DeployConfig): string =>
+  `${resourceName(config, 'datasets')}-${config.account}`;
+
+export function stackEnv(config: DeployConfig): { account: string; region: string } {
+  return { account: config.account, region: config.region };
 }
 
 export function commonTags(config: DeployConfig): Record<string, string> {
@@ -118,3 +117,6 @@ export function commonTags(config: DeployConfig): Record<string, string> {
     ManagedBy: 'cdk',
   };
 }
+
+/** The path CloudFront forwards to the API, and the base path Mangum strips. */
+export const API_BASE_PATH = '/api';

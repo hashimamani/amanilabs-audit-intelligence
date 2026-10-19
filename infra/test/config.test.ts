@@ -54,20 +54,19 @@ describe('loadDeployConfig', () => {
 });
 
 describe('parseDeployConfig', () => {
-  const minimal = { stage: 'dev', alarmEmail: 'ops@amanilabs.co.ke' };
+  const minimal = { stage: 'dev', account: '123456789012', alarmEmail: 'ops@amanilabs.co.ke' };
 
-  it('fills every optional setting so a minimal dev config is deployable', () => {
+  it('fills every optional setting so a minimal config is deployable', () => {
     const config = parseDeployConfig(minimal);
     expect(config.region).toBe('eu-west-1');
     expect(config.logRetentionDays).toBe(30);
-    expect(config.account).toBeUndefined();
+    expect(config.requireMfa).toBe(false);
+    expect(config.datasetRetentionDays).toBe(30);
   });
 
-  it('requires prod to pin the account id', () => {
-    expect(() => parseDeployConfig({ ...minimal, stage: 'prod' })).toThrow(/account/u);
-    expect(parseDeployConfig({ ...minimal, stage: 'prod', account: '123456789012' }).account).toBe(
-      '123456789012',
-    );
+  it('requires every stage to pin the account id', () => {
+    expect(() => parseDeployConfig({ stage: 'dev', alarmEmail: 'ops@amanilabs.co.ke' })).toThrow(/account/u);
+    expect(() => parseDeployConfig({ ...minimal, account: '1234' })).toThrow(/12-digit/u);
   });
 
   it('refuses a log retention CloudWatch does not offer', () => {
@@ -78,7 +77,7 @@ describe('parseDeployConfig', () => {
 });
 
 describe('naming', () => {
-  const config = parseDeployConfig({ stage: 'dev', alarmEmail: 'ops@amanilabs.co.ke' });
+  const config = parseDeployConfig({ stage: 'dev', account: '123456789012', alarmEmail: 'ops@amanilabs.co.ke' });
 
   it('prefixes stacks and resources with the stage so stages cannot collide', () => {
     expect(stackName(config, 'Data')).toBe('AuditIntelligence-dev-Data');

@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  # Lambda targets python3.13 and node22 builds the web bundle. CI runs the
+  # Lambda targets python3.14 and node22 builds the web bundle. CI runs the
   # same versions so test behaviour and runtime behaviour cannot diverge.
   NODE_VERSION: '22'
 

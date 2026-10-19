@@ -54,6 +54,26 @@ def _env(name: str, default: str | None = None) -> str | None:
     return value if value not in (None, "") else default
 
 
+def _anthropic_api_key() -> str | None:
+    """The key comes from the environment locally and from Secrets Manager
+    when deployed (a Lambda environment variable cannot hold a secret
+    reference). The secret is created holding "unset" so a fresh deployment
+    degrades to "AI features are not configured" rather than failing."""
+    direct = _env("ANTHROPIC_API_KEY")
+    if direct:
+        return direct
+    secret_arn = _env("ANTHROPIC_API_KEY_SECRET_ARN")
+    if not secret_arn:
+        return None
+    import boto3
+
+    try:
+        value = boto3.client("secretsmanager").get_secret_value(SecretId=secret_arn).get("SecretString", "")
+    except Exception:
+        return None
+    return value if value and value != "unset" else None
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     app_env = _env("APP_ENV", "local")
@@ -74,7 +94,7 @@ def get_settings() -> Settings:
         upload_url_ttl_seconds=int(_env("UPLOAD_URL_TTL_SECONDS", "900")),
         job_runner=_env("JOB_RUNNER", "inline" if is_local else "sqs"),
         jobs_queue_url=_env("JOBS_QUEUE_URL"),
-        anthropic_api_key=_env("ANTHROPIC_API_KEY"),
+        anthropic_api_key=_anthropic_api_key(),
         cors_origins=tuple(
             o.strip() for o in _env("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()
         ),

@@ -91,3 +91,22 @@ def test_analysis_run_failure_is_recorded_on_the_run(client, default_token, head
     # A failed run never becomes "the latest run" for listings.
     cases = client.get("/cases", headers=headers(default_token)).json()
     assert all(c["run_id"] != run["id"] for c in cases)
+
+
+def _context():
+    return MagicMock(aws_request_id="r3", function_name="worker", memory_limit_in_mb=512, invoked_function_arn="arn")
+
+
+def test_worker_admin_task_provisions_a_tenant(client, headers, login):
+    event = {"admin_task": "create_tenant", "slug": "worker-sacco", "name": "Worker SACCO",
+             "admin_email": "boss@worker-sacco.example", "admin_name": "Boss"}
+    result = worker_handler.handler(event, _context())
+    assert result["ok"] is True
+    assert result["admin_email"] == "boss@worker-sacco.example"
+    token = login(client, "boss@worker-sacco.example", result["password"])
+    me = client.get("/auth/me", headers=headers(token)).json()
+    assert (me["role"], me["tenant_slug"], me["tenant_name"]) == ("admin", "worker-sacco", "Worker SACCO")
+
+    again = worker_handler.handler(event, _context())
+    assert again == {"ok": False, "error": "Tenant slug 'worker-sacco' already exists"}
+    assert worker_handler.handler({"admin_task": "drop_everything"}, _context())["ok"] is False

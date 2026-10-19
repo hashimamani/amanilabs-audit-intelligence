@@ -1,5 +1,7 @@
 node_modules/
 cdk.out/
 cdk.context.json
+# Staging copy of the backend, rebuilt on every synth.
+.lambda-src/
 # Carries a real account id; only prod.json.example is committed.
 config/prod.json

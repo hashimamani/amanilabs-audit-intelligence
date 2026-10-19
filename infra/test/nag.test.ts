@@ -6,7 +6,7 @@ import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { AwsSolutionsChecks } from 'cdk-nag';
 import { afterEach, describe, expect, it } from 'vitest';
 import { defineStacks } from '../lib/app.js';
-import { parseDeployConfig } from '../lib/config.js';
+import { testConfig } from './helpers.js';
 
 /**
  * cdk-nag reports nothing when an app is compliant, so a silently disabled
@@ -31,7 +31,7 @@ afterEach(() => {
 
 interface ValidationReport {
   readonly pluginReports: {
-    readonly violations: { readonly ruleName: string }[];
+    readonly violations: { readonly ruleName: string; readonly violatingResources?: { readonly resourceLogicalId: string }[] }[];
   }[];
 }
 
@@ -39,7 +39,9 @@ function violationsIn(outdir: string): string[] {
   const file = join(outdir, 'validation-report.json');
   if (!existsSync(file)) return [];
   const report = JSON.parse(readFileSync(file, 'utf8')) as ValidationReport;
-  return report.pluginReports.flatMap((plugin) => plugin.violations.map((v) => v.ruleName));
+  return report.pluginReports.flatMap((plugin) =>
+    plugin.violations.map((v) => `${v.ruleName}: ${(v.violatingResources ?? []).map((r) => r.resourceLogicalId).join(', ')}`),
+  );
 }
 
 describe('cdk-nag enforcement', () => {
@@ -53,7 +55,7 @@ describe('cdk-nag enforcement', () => {
     new Bucket(stack, 'NonCompliantBucket');
 
     expect(() => app.synth()).toThrow();
-    const rules = violationsIn(outdir);
+    const rules = violationsIn(outdir).join('\n');
     expect(rules).toContain('AwsSolutions-S1');
     expect(rules).toContain('AwsSolutions-S10');
   });
@@ -61,18 +63,18 @@ describe('cdk-nag enforcement', () => {
   for (const stage of ['dev', 'prod'] as const) {
     it(`passes on every ${stage} stack, with only the acknowledgements in the source`, () => {
       const outdir = freshOutdir();
-      const app = new App({ outdir });
+      const app = new App({ outdir, context: { 'aws:cdk:bundling-stacks': [] } });
       Validations.of(app).addPlugins(new AwsSolutionsChecks(app));
+      defineStacks(app, testConfig(stage));
 
-      const config = parseDeployConfig({
-        stage,
-        account: '123456789012',
-        alarmEmail: 'ops@amanilabs.co.ke',
-      });
-      defineStacks(app, config);
-
-      expect(() => app.synth()).not.toThrow();
+      let error: unknown;
+      try {
+        app.synth();
+      } catch (e) {
+        error = e;
+      }
       expect(violationsIn(outdir)).toEqual([]);
+      expect(error).toBeUndefined();
     });
   }
 });

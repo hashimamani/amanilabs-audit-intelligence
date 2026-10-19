@@ -56,6 +56,11 @@ jobs:
       - run: npm run typecheck && npm test
         working-directory: infra
 
+      # The Web stack ships whatever is in frontend/dist; without this step it
+      # would deploy a placeholder page.
+      - run: npm ci && npm run build
+        working-directory: audit_intelligence/frontend
+
       - name: Assume the deploy role
         uses: aws-actions/configure-aws-credentials@v4
         with:

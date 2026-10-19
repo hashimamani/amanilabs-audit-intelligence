@@ -22,9 +22,11 @@ Description: >-
 # cannot read a secret, and cannot call DynamoDB at all. It can start a
 # deployment of this repository, which is recoverable.
 #
-# One role, not two: the web bundle is published by CDK's BucketDeployment as
-# part of the same deployment, so there is no separate publish identity to keep
-# apart from the deploy identity.
+# The web bundle is published by CDK's BucketDeployment inside the same
+# deployment, so there is no separate publish identity. There IS a second,
+# optional role for operator tasks - provisioning a SACCO tenant - which may
+# invoke the worker function and nothing else, from its own GitHub environment,
+# so that approving a deployment and approving a new tenant stay separate.
 
 Parameters:
   Stage:
@@ -72,8 +74,17 @@ Parameters:
     Default: hnb659fds
     Description: CDK bootstrap qualifier. The default unless `cdk bootstrap` was given another.
 
+  AdminTasksSubject:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional second GitHub subject, for the workflow that provisions tenants.
+      Give it a different GitHub environment from the deploy job - `admin-tasks`
+      rather than `dev` - so the two approvals are separate. Leave empty to skip.
+
 Conditions:
   UsesGitHub: !Equals [!Ref TrustMode, 'GitHubOidc']
+  CreatesAdminTasksRole: !Not [!Equals [!Ref AdminTasksSubject, '']]
 
 Rules:
   GitHubNeedsSubjectAndProvider:
@@ -144,7 +155,49 @@ Resources:
         - Key: Environment
           Value: !Ref Stage
 
+  AdminTasksRole:
+    Type: AWS::IAM::Role
+    Condition: CreatesAdminTasksRole
+    Properties:
+      RoleName: !Sub 'audit-intelligence-admin-tasks-${Stage}'
+      Description: !Sub 'Runs operator tasks (tenant provisioning) for ${Stage} by invoking the worker function. No data access.'
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref OidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com'
+                'token.actions.githubusercontent.com:sub': !Ref AdminTasksSubject
+      Policies:
+        - PolicyName: invoke-worker
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: InvokeTheWorker
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                # The worker's own role is what reads and writes; this role can
+                # only ask it to run a named task.
+                Resource: !Sub 'arn:${AWS::Partition}:lambda:${DeployRegion}:${AWS::AccountId}:function:audit-intelligence-${Stage}-worker'
+      Tags:
+        - Key: Project
+          Value: AuditIntelligence
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: Environment
+          Value: !Ref Stage
+
 Outputs:
+  AdminTasksRoleArn:
+    Condition: CreatesAdminTasksRole
+    Description: Assume this to provision a tenant through the worker function.
+    Value: !GetAtt AdminTasksRole.Arn
+
   DeployRoleArn:
     Description: Assume this to deploy. Put it in the GitHub environment's variables.
     Value: !GetAtt DeployRole.Arn

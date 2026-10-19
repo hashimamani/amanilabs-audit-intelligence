@@ -1,5 +1,8 @@
 {
   "region": "eu-west-1",
+  "account": "304442552123",
   "alarmEmail": "admin@amanilabs.co.ke",
-  "logRetentionDays": 30
+  "logRetentionDays": 30,
+  "requireMfa": false,
+  "datasetRetentionDays": 30
 }
