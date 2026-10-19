@@ -1918,12 +1918,18 @@ the budget half-written in the working tree; this picks it up.
 
 ### What the next session should do
 
-Everything from here needs the one-time bootstrap, which only Hashim can
-run (a non-root admin identity; `docs/DEPLOYING.md` section 1):
+Checked on 2026-10-19: account `304442552123` is **already CDK-bootstrapped
+in eu-west-1** (`CDKToolkit`, from Tender Tracker) and already has the
+GitHub OIDC provider, so no `cdk bootstrap` is needed. The machine's
+default AWS profile is root, but the `sms-notify` and `cctv` profiles are
+non-root `AdministratorAccess` IAM users; the deploy-identity script runs
+under one of those.
 
-1. `cdk bootstrap aws://304442552123/eu-west-1`, then
-   `scripts/deploy-identity.sh dev hashimamani/amanilabs-audit-intelligence <admin-profile>`
-   and the `gh` commands it prints.
+1. `scripts/deploy-identity.sh dev hashimamani/amanilabs-audit-intelligence sms-notify`
+   and then the six `gh` commands it prints (two environments, four
+   variables). Claude's auto mode refuses both halves - creating IAM roles
+   and setting the GitHub environment variables - so Hashim clicks Run on
+   them; the session that asks will have them pre-filled.
 2. `gh workflow run deploy.yml -f stage=dev` (dry run), then with
    `-f confirm=dev`. Confirm the alarm email, put the Anthropic key in,
    provision a tenant, sign in through Cognito (new password, optional

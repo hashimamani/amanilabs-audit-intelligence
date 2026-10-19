@@ -34,7 +34,8 @@ synthesised by CI.
 
 ## 1. One-time bootstrap (a human, with admin credentials)
 
-Once per account and region:
+Once per account and region (already done for `304442552123` / `eu-west-1`
+by Tender Tracker - the `CDKToolkit` stack exists, so skip this):
 
 ```bash
 cd infra && npx cdk bootstrap aws://304442552123/eu-west-1 --profile <admin-profile>
