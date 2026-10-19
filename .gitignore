@@ -11,5 +11,3 @@ audit_intelligence/backend/data/uploads/
 node_modules/
 cdk.out/
 *.tsbuildinfo
-# Carries a real account id; only prod.json.example is committed.
-infra/config/prod.json

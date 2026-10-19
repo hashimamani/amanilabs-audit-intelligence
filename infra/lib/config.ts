@@ -35,6 +35,12 @@ export const deployConfigSchema = z.strictObject({
   requireMfa: z.boolean().default(false),
   /** Raw uploaded CSVs are deleted this many days after upload; the cases built from them stay. */
   datasetRetentionDays: z.number().int().min(1).max(3650).default(30),
+  /**
+   * Paid AI calls (case questions, charts, board reports) one tenant may make
+   * per UTC day before the API answers 429. A ceiling on the Anthropic bill
+   * per customer, not a product limit: 200 is far above a day's real use.
+   */
+  aiDailyLimit: z.number().int().min(1).max(100_000).default(200),
 });
 
 export type DeployConfig = z.infer<typeof deployConfigSchema>;
@@ -74,7 +80,7 @@ export function loadDeployConfig(stage: Stage, overrides: Record<string, unknown
   } catch (cause) {
     throw new Error(
       `No deploy configuration for stage "${stage}". Expected ${file}. ` +
-        'Copy infra/config/prod.json.example and edit it; see docs/DEPLOYING.md.',
+        'Every stage is committed under infra/config/; see docs/DEPLOYING.md.',
       { cause },
     );
   }

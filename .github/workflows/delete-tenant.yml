@@ -1,0 +1,81 @@
+name: delete tenant
+
+# Erases a SACCO's tenant: its users' Cognito accounts, its uploaded CSVs
+# and every record in its table partition. This is the right-to-erasure
+# path and the off-boarding path; there is no undo short of a point-in-time
+# restore of the whole table (docs/RUNBOOK.md).
+#
+# The slug has to be typed twice, here and again in the worker, which
+# refuses unless `confirm` repeats it exactly. The role this job assumes can
+# invoke that one function and nothing else.
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Which stage
+        type: choice
+        options: [dev, prod]
+        default: dev
+        required: true
+      slug:
+        description: The tenant to erase (its URL-safe identifier)
+        type: string
+        required: true
+      confirm:
+        description: Type the same slug again to confirm. Anything else stops the run.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: admin-tasks-${{ inputs.stage }}
+    steps:
+      - name: Check the confirmation
+        if: inputs.confirm != inputs.slug
+        run: |
+          echo "::error::The confirmation did not match the slug. Nothing was deleted."
+          exit 1
+
+      - name: Assume the admin-tasks role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ADMIN_TASKS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: audit-intelligence-delete-${{ inputs.stage }}-${{ github.run_id }}
+
+      - name: Ask the worker to erase the tenant
+        env:
+          PAYLOAD: >-
+            {"admin_task": "delete_tenant",
+             "slug": ${{ toJSON(inputs.slug) }},
+             "confirm": ${{ toJSON(inputs.confirm) }}}
+        run: |
+          aws lambda invoke \
+            --function-name "audit-intelligence-${{ inputs.stage }}-worker" \
+            --cli-binary-format raw-in-base64-out \
+            --payload "$PAYLOAD" \
+            response.json >/dev/null
+          cat response.json
+          echo
+          python3 - <<'PY'
+          import json, os, sys
+          body = json.load(open("response.json"))
+          if isinstance(body, dict) and body.get("ok"):
+              summary = (
+                  f"### Tenant erased\n\n`{body['slug']}` — {body['name']}\n\n"
+                  f"| Removed | Count |\n|---|---|\n"
+                  f"| User accounts | {body['users_deleted']} |\n"
+                  f"| Uploaded datasets | {body['datasets_deleted']} |\n"
+                  f"| Table items (runs, cases, activity, jobs, users, usage, the tenant) | {body['items_deleted']} |\n"
+              )
+              print(summary, file=open(os.environ["GITHUB_STEP_SUMMARY"], "a"))
+          else:
+              print(f"::error::{body}")
+              sys.exit(1)
+          PY

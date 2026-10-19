@@ -97,6 +97,7 @@ export class ApiStack extends Stack {
       JOB_RUNNER: 'sqs',
       JOBS_QUEUE_URL: this.jobsQueue.queueUrl,
       ANTHROPIC_API_KEY_SECRET_ARN: anthropicApiKey.secretArn,
+      AI_DAILY_LIMIT: String(config.aiDailyLimit),
     };
 
     const api = new PythonFunction(this, 'ApiFn', {
@@ -138,14 +139,15 @@ export class ApiStack extends Stack {
      * Object actions under one prefix. Deliberately not `grantReadWrite`,
      * which hands out s3:List*, s3:GetBucket* and s3:DeleteObjectVersion
      * across the bucket. The API presigns PUTs (so it needs PutObject) and
-     * reads headers to validate; the worker only reads.
+     * reads headers to validate; the worker reads datasets to analyse them
+     * and deletes them when a tenant is erased - by key, never by listing.
      */
     const datasetObjects = `arn:aws:s3:::${datasetsBucketName(config)}/${DATASETS_PREFIX}*`;
     api.fn.addToRolePolicy(
       new PolicyStatement({ effect: Effect.ALLOW, actions: ['s3:PutObject', 's3:GetObject'], resources: [datasetObjects] }),
     );
     worker.fn.addToRolePolicy(
-      new PolicyStatement({ effect: Effect.ALLOW, actions: ['s3:GetObject'], resources: [datasetObjects] }),
+      new PolicyStatement({ effect: Effect.ALLOW, actions: ['s3:GetObject', 's3:DeleteObject'], resources: [datasetObjects] }),
     );
     for (const fn of [api, worker]) {
       Validations.of(fn.fn.role!).acknowledge({
@@ -157,21 +159,30 @@ export class ApiStack extends Stack {
       });
     }
 
-    api.fn.addToRolePolicy(
+    /**
+     * Exactly what user management performs, from the API. Absent on purpose:
+     * AdminDeleteUser (from the app, accounts are disabled, never deleted) and
+     * AdminSetUserPassword (no password ever passes through code).
+     */
+    const userManagement = [
+      'cognito-idp:AdminCreateUser',
+      'cognito-idp:AdminGetUser',
+      'cognito-idp:AdminAddUserToGroup',
+      'cognito-idp:AdminRemoveUserFromGroup',
+      'cognito-idp:AdminEnableUser',
+      'cognito-idp:AdminDisableUser',
+      'cognito-idp:AdminUserGlobalSignOut',
+    ];
+    api.fn.addToRolePolicy(new PolicyStatement({ effect: Effect.ALLOW, actions: userManagement, resources: [userPool.userPoolArn] }));
+    /**
+     * The worker provisions tenants (create-tenant workflow) and erases them
+     * (delete-tenant workflow, the right-to-erasure path), so it alone may
+     * delete accounts. Nothing reachable from an HTTP request can.
+     */
+    worker.fn.addToRolePolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
-        // Exactly what user management performs. Absent on purpose: AdminDeleteUser
-        // (accounts are disabled, never deleted) and AdminSetUserPassword (no
-        // password ever passes through code).
-        actions: [
-          'cognito-idp:AdminCreateUser',
-          'cognito-idp:AdminGetUser',
-          'cognito-idp:AdminAddUserToGroup',
-          'cognito-idp:AdminRemoveUserFromGroup',
-          'cognito-idp:AdminEnableUser',
-          'cognito-idp:AdminDisableUser',
-          'cognito-idp:AdminUserGlobalSignOut',
-        ],
+        actions: [...userManagement, 'cognito-idp:AdminDeleteUser'],
         resources: [userPool.userPoolArn],
       }),
     );

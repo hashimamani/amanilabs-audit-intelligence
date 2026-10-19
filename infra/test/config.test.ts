@@ -38,9 +38,21 @@ describe('loadDeployConfig', () => {
     expect(config.alarmEmail).not.toMatch(/example\.(com|co\.ke|org)$/u);
   });
 
-  it('points at the example file and the docs when a stage has no configuration', () => {
-    expect(() => loadDeployConfig('prod')).toThrow(/No deploy configuration for stage "prod"/u);
-    expect(() => loadDeployConfig('prod')).toThrow(/DEPLOYING\.md/u);
+  it('loads the committed prod configuration, which requires MFA and keeps logs longer', () => {
+    const prod = loadDeployConfig('prod');
+    const dev = loadDeployConfig('dev');
+    expect(prod.stage).toBe('prod');
+    expect(prod.requireMfa).toBe(true);
+    expect(prod.logRetentionDays).toBeGreaterThanOrEqual(dev.logRetentionDays);
+    // One AmaniLabs account hosts every stage of every product.
+    expect(prod.account).toBe(dev.account);
+    expect(prod.region).toBe(dev.region);
+  });
+
+  it('points at the docs when a stage has no configuration', () => {
+    const missing = 'staging' as Parameters<typeof loadDeployConfig>[0];
+    expect(() => loadDeployConfig(missing)).toThrow(/No deploy configuration for stage "staging"/u);
+    expect(() => loadDeployConfig(missing)).toThrow(/DEPLOYING\.md/u);
   });
 
   it('takes the stage from the file path, so the file body cannot contradict it', () => {

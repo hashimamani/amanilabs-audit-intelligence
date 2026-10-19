@@ -14,7 +14,7 @@ from decimal import Decimal
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
-from app.db.table import GSI1_NAME, get_table
+from app.db.table import GSI1_NAME, TTL_ATTRIBUTE, get_table
 
 CASE_SUMMARY_FIELDS = (
     "case_ref", "run_id", "subject_type", "subject_id", "subject_name", "risk_score",
@@ -415,3 +415,59 @@ def list_datasets(slug: str) -> list[dict]:
         KeyConditionExpression=Key("PK").eq(tenant_pk(slug)) & Key("SK").begins_with("DATASET#"),
         ScanIndexForward=False,
     )
+
+
+# --- usage counters --------------------------------------------------------
+
+class UsageLimitReached(Exception):
+    pass
+
+
+def get_usage(slug: str, key: str) -> int:
+    item = get_table().get_item(Key={"PK": tenant_pk(slug), "SK": f"USAGE#{key}"}).get("Item")
+    return int(item["count"]) if item else 0
+
+
+def increment_usage(slug: str, key: str, *, expires_at: int, limit: int) -> int:
+    """Adds one to the counter and returns the new value, unless it already
+    stands at `limit`, in which case nothing is written and
+    UsageLimitReached is raised. Check and increment are one conditional
+    write, so concurrent requests cannot overshoot. The item carries the
+    TTL attribute so DynamoDB removes it after `expires_at`."""
+    try:
+        response = get_table().update_item(
+            Key={"PK": tenant_pk(slug), "SK": f"USAGE#{key}"},
+            UpdateExpression="ADD #c :one SET #ttl = :ttl",
+            ConditionExpression="attribute_not_exists(#c) OR #c < :limit",
+            ExpressionAttributeNames={"#c": "count", "#ttl": TTL_ATTRIBUTE},
+            ExpressionAttributeValues={":one": 1, ":ttl": expires_at, ":limit": limit},
+            ReturnValues="UPDATED_NEW",
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            raise UsageLimitReached(f"{slug} has used {limit} {key} calls") from e
+        raise
+    return int(response["Attributes"]["count"])
+
+
+# --- erasure ---------------------------------------------------------------
+
+def delete_tenant_items(slug: str) -> int:
+    """Removes every item in the tenant's partition, the tenant itself last.
+    Returns the number of items deleted."""
+    table = get_table()
+    deleted = 0
+    response = table.query(KeyConditionExpression=Key("PK").eq(tenant_pk(slug)), ProjectionExpression="PK, SK")
+    keys = list(response.get("Items", []))
+    while "LastEvaluatedKey" in response:
+        response = table.query(
+            KeyConditionExpression=Key("PK").eq(tenant_pk(slug)), ProjectionExpression="PK, SK",
+            ExclusiveStartKey=response["LastEvaluatedKey"],
+        )
+        keys.extend(response.get("Items", []))
+    keys.sort(key=lambda k: k["SK"] == "META")
+    with table.batch_writer() as batch:
+        for key in keys:
+            batch.delete_item(Key={"PK": key["PK"], "SK": key["SK"]})
+            deleted += 1
+    return deleted

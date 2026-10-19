@@ -3,10 +3,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Match } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { GSI1_PROJECTED } from '../lib/stacks/data-stack.js';
+import { GSI1_PROJECTED, TTL_ATTRIBUTE } from '../lib/stacks/data-stack.js';
 import { buildApp, type Synthesised } from './helpers.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const tablePy = () => readFileSync(join(repoRoot, 'audit_intelligence', 'backend', 'app', 'db', 'table.py'), 'utf8');
 
 let dev: Synthesised;
 let prod: Synthesised;
@@ -15,6 +16,15 @@ beforeAll(() => {
   dev = buildApp('dev', undefined, false);
   prod = buildApp('prod', undefined, false);
 });
+
+/** The IAM policies attached to one function's role, as one searchable string. */
+function policiesOf(synth: Synthesised, fn: 'ApiFn' | 'WorkerFn'): string {
+  const policies = Object.values(synth.templates.api.findResources('AWS::IAM::Policy')).filter((policy) =>
+    (policy.Properties.Roles as { Ref: string }[]).some((role) => role.Ref.startsWith(`${fn}Role`)),
+  );
+  expect(policies.length, `${fn} has no inline policy`).toBeGreaterThan(0);
+  return JSON.stringify(policies);
+}
 
 describe('DataStack', () => {
   it('creates one on-demand table with the key schema the backend uses', () => {
@@ -36,14 +46,18 @@ describe('DataStack', () => {
           Projection: { ProjectionType: 'INCLUDE', NonKeyAttributes: GSI1_PROJECTED },
         }),
       ],
+      TimeToLiveSpecification: { AttributeName: TTL_ATTRIBUTE, Enabled: true },
     });
   });
 
   it('projects exactly the attributes the backend declares', () => {
-    const python = readFileSync(join(repoRoot, 'audit_intelligence', 'backend', 'app', 'db', 'table.py'), 'utf8');
-    const block = /GSI1_PROJECTED = \[([\s\S]*?)\]/u.exec(python)?.[1] ?? '';
+    const block = /GSI1_PROJECTED = \[([\s\S]*?)\]/u.exec(tablePy())?.[1] ?? '';
     const declared = [...block.matchAll(/"([a-z_]+)"/gu)].map((m) => m[1]);
     expect(declared).toEqual(GSI1_PROJECTED);
+  });
+
+  it('expires items by the attribute the backend writes', () => {
+    expect(/TTL_ATTRIBUTE = "([a-z_]+)"/u.exec(tablePy())?.[1]).toBe(TTL_ATTRIBUTE);
   });
 
   it('protects production data from a stack deletion', () => {
@@ -142,7 +156,7 @@ describe('ApiStack', () => {
       expect(fn.Properties.TracingConfig).toEqual({ Mode: 'Active' });
       expect(fn.Properties.LoggingConfig.LogFormat).toBe('JSON');
       expect(fn.Properties.Environment.Variables).toMatchObject({
-        AUTH_MODE: 'cognito', DATASET_STORE: 's3', JOB_RUNNER: 'sqs', APP_ENV: 'prod',
+        AUTH_MODE: 'cognito', DATASET_STORE: 's3', JOB_RUNNER: 'sqs', APP_ENV: 'prod', AI_DAILY_LIMIT: '200',
       });
     }
     const handlers = Object.values(fns).map((fn) => fn.Properties.Handler).sort();
@@ -185,12 +199,24 @@ describe('ApiStack', () => {
     }
   });
 
-  it('scopes Cognito admin permissions to this pool and excludes deletion and password setting', () => {
-    const policies = JSON.stringify(prod.templates.api.findResources('AWS::IAM::Policy'));
-    expect(policies).toMatch(/cognito-idp:AdminCreateUser/u);
-    expect(policies).not.toMatch(/cognito-idp:AdminDeleteUser/u);
-    expect(policies).not.toMatch(/cognito-idp:AdminSetUserPassword/u);
-    expect(policies).not.toMatch(/"cognito-idp:\*"/u);
+  it('lets the API manage users but never delete them or set a password', () => {
+    const api = policiesOf(prod, 'ApiFn');
+    expect(api).toMatch(/cognito-idp:AdminCreateUser/u);
+    expect(api).not.toMatch(/cognito-idp:AdminDeleteUser/u);
+    expect(api).not.toMatch(/cognito-idp:AdminSetUserPassword/u);
+    expect(api).not.toMatch(/"cognito-idp:\*"/u);
+    expect(api).not.toMatch(/s3:DeleteObject/u);
+  });
+
+  it('lets only the worker erase a tenant: delete its accounts and its uploaded files', () => {
+    const worker = policiesOf(prod, 'WorkerFn');
+    expect(worker).toMatch(/cognito-idp:AdminDeleteUser/u);
+    expect(worker).not.toMatch(/cognito-idp:AdminSetUserPassword/u);
+    expect(worker).toMatch(/s3:DeleteObject/u);
+    expect(worker).not.toMatch(/s3:DeleteObjectVersion/u);
+    expect(worker).not.toMatch(/s3:DeleteBucket/u);
+    // Erasure deletes by key; it never needs to list.
+    expect(worker).not.toMatch(/s3:List/u);
   });
 
   it('throttles and logs the stage', () => {

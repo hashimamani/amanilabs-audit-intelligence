@@ -13,6 +13,7 @@ from app.api.schemas import (
 )
 from app.core.ai import call_claude, case_to_grounding_text, get_anthropic_client
 from app.core.auth import Principal, get_current_tenant, get_current_user
+from app.core.budget import enforce_ai_budget
 from app.db import repository as repo
 from app.db.repository import Tenant
 
@@ -130,7 +131,7 @@ def update_case(
 def ask_case_question(
     case_ref: str,
     payload: CaseAskIn,
-    tenant: Tenant = Depends(get_current_tenant),
+    tenant: Tenant = Depends(enforce_ai_budget),
     client: anthropic.Anthropic = Depends(get_anthropic_client),
 ):
     row = _get_or_404(tenant, case_ref)

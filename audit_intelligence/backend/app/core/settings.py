@@ -40,6 +40,7 @@ class Settings:
     jobs_queue_url: str | None
 
     anthropic_api_key: str | None
+    ai_daily_limit: int
     cors_origins: tuple[str, ...]
 
     @property
@@ -95,6 +96,7 @@ def get_settings() -> Settings:
         job_runner=_env("JOB_RUNNER", "inline" if is_local else "sqs"),
         jobs_queue_url=_env("JOBS_QUEUE_URL"),
         anthropic_api_key=_anthropic_api_key(),
+        ai_daily_limit=int(_env("AI_DAILY_LIMIT", "200")),
         cors_origins=tuple(
             o.strip() for o in _env("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()
         ),

@@ -11,6 +11,7 @@ across tenants without constructing a different PK on purpose):
   PK=TENANT#<slug>  SK=ACTIVITY#<case_ref>#<ts>  one auditor action on a case
   PK=TENANT#<slug>  SK=JOB#<job_id>              background job
   PK=TENANT#<slug>  SK=DATASET#<dataset_id>      uploaded dataset
+  PK=TENANT#<slug>  SK=USAGE#ai#<yyyy-mm-dd>     paid AI calls that day (expired by TTL)
 
 GSI1 serves the two lookups that are not by tenant partition order:
   cases of one run, highest risk first   GSI1PK=TENANT#<slug>#RUN#<run_no>  GSI1SK=RISK#<score>#<seq>
@@ -30,6 +31,9 @@ from app.core.settings import get_settings
 
 TABLE_KEYS = {"PK": "S", "SK": "S", "GSI1PK": "S", "GSI1SK": "S"}
 GSI1_NAME = "GSI1"
+# Epoch seconds; items carrying it are removed by DynamoDB once it passes.
+# The CDK Data stack enables TTL on the same attribute; infra/test asserts it.
+TTL_ATTRIBUTE = "ttl"
 GSI1_PROJECTED = [
     "case_ref", "run_id", "subject_type", "subject_id", "subject_name", "risk_score",
     "severity", "status", "triggered_rules", "flag_count", "created_at", "updated_at",
@@ -77,6 +81,9 @@ def create_table(resource, name: str):
         ],
     )
     table.wait_until_exists()
+    resource.meta.client.update_time_to_live(
+        TableName=name, TimeToLiveSpecification={"Enabled": True, "AttributeName": TTL_ATTRIBUTE},
+    )
     return table
 
 

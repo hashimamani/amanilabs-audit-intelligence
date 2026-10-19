@@ -2,13 +2,14 @@
 Lambda entrypoint for the worker. Two kinds of invocation:
 
 - an SQS batch from the jobs queue: one record = one job;
-- a direct invocation carrying `admin_task`, from the provision-tenant
-  workflow, whose role may invoke this function and nothing else.
+- a direct invocation carrying `admin_task`, from the provision-tenant and
+  delete-tenant workflows, whose role may invoke this function and nothing
+  else.
 """
 
 import json
 
-from app.core import users
+from app.core import tenants, users
 from app.core.logging import logger
 from app.db import repository as repo
 from app.jobs.execute import execute_job
@@ -31,7 +32,21 @@ def create_tenant_task(event: dict) -> dict:
     return result
 
 
-ADMIN_TASKS = {"create_tenant": create_tenant_task}
+def delete_tenant_task(event: dict) -> dict:
+    """Erases a tenant. The slug must be repeated in `confirm`: the workflow
+    checks that too, but this function is the last line and does not trust
+    its caller to have done so."""
+    slug = event.get("slug")
+    if not slug or event.get("confirm") != slug:
+        return {"ok": False, "error": "Refusing: `confirm` must repeat the tenant slug exactly"}
+    try:
+        result = tenants.erase_tenant(slug)
+    except tenants.TenantNotFound:
+        return {"ok": False, "error": f"No tenant with slug '{slug}'"}
+    return {"ok": True, **result}
+
+
+ADMIN_TASKS = {"create_tenant": create_tenant_task, "delete_tenant": delete_tenant_task}
 
 
 @logger.inject_lambda_context

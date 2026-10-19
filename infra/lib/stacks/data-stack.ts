@@ -20,6 +20,9 @@ export const GSI1_PROJECTED = [
   'user_id', 'email', 'name', 'role', 'is_active', 'password_hash', 'tenant_slug',
 ];
 
+/** The epoch-seconds attribute DynamoDB expires items by. */
+export const TTL_ATTRIBUTE = 'ttl';
+
 /** Everything durable: the table, the uploaded datasets, and the AI key. */
 export class DataStack extends Stack {
   readonly table: Table;
@@ -54,6 +57,9 @@ export class DataStack extends Stack {
       billingMode: BillingMode.PAY_PER_REQUEST,
       encryption: TableEncryption.AWS_MANAGED,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: protectedStage },
+      // Per-day AI usage counters carry an expiry; nothing else does. Must
+      // match TTL_ATTRIBUTE in the backend's db/table.py - infra/test asserts it.
+      timeToLiveAttribute: TTL_ATTRIBUTE,
       removalPolicy,
       deletionProtection: protectedStage,
     });
