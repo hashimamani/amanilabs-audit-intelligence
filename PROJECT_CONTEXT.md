@@ -1420,7 +1420,7 @@ instead of their real result.
   landing right at or past the old 60s ceiling - exactly the previously-
   failing range, now succeeding.
 
-## 23. Serverless rebuild on AWS — decisions and phase plan (in progress)
+## 23. Serverless rebuild on AWS — decisions and phase plan (code complete; nothing deployed until the bootstrap)
 
 Requested directly on 2026-10-19: "this project did not have proper
 infrastructure done in a proper production method ... should run
@@ -1551,7 +1551,8 @@ are pure pandas/dicts. Idle cost well under $5/month vs ~$20 now.
 - **infra/** (CDK, TypeScript, ESM, `tsx`): `lib/config.ts` validates
   `infra/config/<stage>.json` with zod at synth (region, optional pinned
   account - required for prod - alarm email, log retention); `prod.json`
-  is gitignored, `prod.json.example` committed. `lib/app.ts`
+  was gitignored with `prod.json.example` committed (reversed in Phase 4:
+  both stage configs are committed now). `lib/app.ts`
   (`defineStacks`) is the single place stacks are declared so `bin/app.ts`
   and the tests synthesise the same thing - empty until Phase 2. cdk-nag's
   AwsSolutions pack is wired through CDK's validation framework in both
@@ -1714,7 +1715,8 @@ Five CDK stacks per stage in `infra/lib/stacks/`, wired in `lib/app.ts`
   cannot bite here). Grants are explicit: table + `index/GSI1`, no `Scan`;
   `s3:GetObject`/`PutObject` on `tenants/*` only (acknowledged by literal
   ARN); Cognito admin actions on the pool without `AdminDeleteUser` or
-  `AdminSetUserPassword`; secret read. Alarms: API 5xx, API p99 > 5 s,
+  `AdminSetUserPassword` (Phase 4 gives `AdminDeleteUser` to the *worker*
+  only, for erasure); secret read. Alarms: API 5xx, API p99 > 5 s,
   each function's errors, DLQ depth, table throttles. Function names are
   fixed (`audit-intelligence-<stage>-api|worker`) so an operator workflow
   can invoke the worker by name.
@@ -1849,12 +1851,87 @@ same `lucide-react` icons; the structure and the behaviour changed.
   rules. The Cognito code path cannot be exercised until dev is deployed
   - that is the first thing to do after the bootstrap.
 
+### Phase 4 - hardening + cutover (code done 2026-10-19; cutover waits on the bootstrap)
+
+The previous session lost its connection a minute into this phase, with
+the budget half-written in the working tree; this picks it up.
+
+- **Per-tenant AI budget** (`core/budget.py`, `repository.increment_usage`):
+  every case question, chart and board report counts one against
+  `USAGE#ai#<utc-day>` under the tenant's partition; past `AI_DAILY_LIMIT`
+  (default 200, `aiDailyLimit` in `infra/config/<stage>.json`) the route
+  answers **429** with a sentence naming the limit and the midnight-UTC
+  reset, before any job is queued. The check and the increment are *one
+  conditional `UpdateItem`* (`attribute_not_exists(count) OR count <
+  :limit`), so concurrent requests cannot overshoot and a refused call is
+  never counted. `enforce_ai_budget` depends on `get_anthropic_client`
+  first, so the 503 for an unconfigured key does not eat allowance. Usage
+  items carry a `ttl` (31 days); TTL is enabled on the table in CDK and in
+  `create_table` for DynamoDB Local/moto, and `infra/test` asserts the
+  attribute name matches `TTL_ATTRIBUTE` in `db/table.py`. The gateway
+  throttle from Phase 2 (20/40 dev, 50/100 prod) remains the request-rate
+  limit; this is the money limit.
+- **Right to erasure** (`core/tenants.erase_tenant`): removes a tenant's
+  Cognito accounts (global sign-out, then `AdminDeleteUser`, disabled ones
+  included), its uploaded CSVs (by key - every dataset item names its id
+  and the files are the fixed export contract - so the worker needs
+  `s3:DeleteObject` under `tenants/*` and still no `s3:ListBucket`), then
+  every item in the partition with the tenant record last. Exposed only as
+  the worker's `delete_tenant` admin task, which refuses unless `confirm`
+  repeats the slug; `.github/workflows/delete-tenant.yml` asks for the slug
+  twice and runs from the `admin-tasks-<stage>` environment like
+  provisioning. The **API function's role is unchanged** - it still cannot
+  delete a user or an object; only the worker's role gained
+  `AdminDeleteUser` and `s3:DeleteObject`, and `test/stacks.test.ts` now
+  asserts that split per role rather than across the stack.
+- **Prod config is committed** (`infra/config/prod.json`: same account
+  `304442552123` and `eu-west-1` as dev and every other AmaniLabs product,
+  MFA required, 90-day logs). The gitignore rule and `prod.json.example`
+  are gone: dev.json already carried the account id, and a config CI cannot
+  read is one CI cannot synthesise. `deploy.yml` needed no change - the
+  typed confirmation for prod is the word `prod`, and the `prod` +
+  `admin-tasks-prod` GitHub environments come from
+  `scripts/deploy-identity.sh prod`.
+- **Docs**: `docs/RUNBOOK.md` (alarms, stuck/failed/parked jobs and the DLQ
+  redrive, 503/429 on AI, sign-in problems, immediate access removal, data
+  held per tenant and erasure, PITR restore, rollback by tag, key rotation,
+  costs); `docs/DECOMMISSION_EC2.md` (the teardown, step by step, by
+  discovery from the Elastic IP rather than remembered ids, with the
+  `audit-intelligence` profile for EC2 and an admin identity for the IAM
+  user, gated on prod being live and walked); `docs/DEPLOYING.md` gained
+  the prod section and tenant removal.
+- **Deliberately not done**: a custom domain (none exists; CloudFront's
+  URL is the address until one does - adding `domainName`/`certificateArn`
+  to the config schema is a half-day when it comes), WAF (CFR2
+  acknowledged in Phase 2; a fixed monthly cost for a tool used by a
+  handful of staff behind Cognito), and the EC2 teardown itself, which the
+  plan puts after the prod cutover and which needs identities this machine
+  must not use.
+- **Verified**: ruff clean; **89** backend tests (`test_budget.py`: the
+  limit, per-tenant isolation, 503 not counted, the conditional write and
+  the TTL attribute; `test_tenant_erasure.py`: a full tenant with a run,
+  cases, dataset and login erased with the neighbour intact, S3 objects
+  deleted without listing, Cognito accounts including a disabled one, and
+  the worker task's typed confirmation); infra typecheck + **41** tests
+  including the cdk-nag pass for dev and prod; a real `cdk synth` of the
+  prod stage with Docker bundling.
+
 ### What the next session should do
 
-If dev is bootstrapped: dispatch the deploy, confirm the alarm email, put
-the Anthropic key in, provision a tenant, sign in through Cognito (new
-password, TOTP if enabled) and walk the app on the CloudFront URL. Then
-Phase 4: per-tenant AI budget/rate limit, `delete_tenant`, prod config
-and the first prod deploy, custom domain when one exists, runbook, and
-the EC2 teardown (instance, security group, Elastic IP, key pair, the
-`audit-intelligence-deploy` IAM user).
+Everything from here needs the one-time bootstrap, which only Hashim can
+run (a non-root admin identity; `docs/DEPLOYING.md` section 1):
+
+1. `cdk bootstrap aws://304442552123/eu-west-1`, then
+   `scripts/deploy-identity.sh dev hashimamani/amanilabs-audit-intelligence <admin-profile>`
+   and the `gh` commands it prints.
+2. `gh workflow run deploy.yml -f stage=dev` (dry run), then with
+   `-f confirm=dev`. Confirm the alarm email, put the Anthropic key in,
+   provision a tenant, sign in through Cognito (new password, optional
+   TOTP) and walk the app on the CloudFront URL. This is the first time the
+   Cognito code path in the frontend runs against a real pool.
+3. Repeat for prod (`deploy-identity.sh prod`, `confirm=prod`, MFA
+   enrolment on first sign-in), provision the real SACCO tenant.
+4. Then `docs/DECOMMISSION_EC2.md`.
+
+Anything found broken on dev in step 2 is the next coding work; nothing in
+the plan is left to build before that.

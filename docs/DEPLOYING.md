@@ -22,10 +22,15 @@ Five CloudFormation stacks per stage, `AuditIntelligence-<stage>-*`:
 | `Web`  | the app bucket, the CloudFront distribution (fronting `/api/*`), `config.json` |
 | `Ops`  | the alarm topic and email subscription, the composite alarm, the dashboard |
 
-| Stage  | Account        | Region      | Config                                   |
-| ------ | -------------- | ----------- | ---------------------------------------- |
-| `dev`  | `304442552123` | `eu-west-1` | `infra/config/dev.json` (committed)      |
-| `prod` | not yet set up | `eu-west-1` | `infra/config/prod.json` (not committed) |
+| Stage  | Account        | Region      | Config                   | Differs from dev by |
+| ------ | -------------- | ----------- | ------------------------ | ------------------- |
+| `dev`  | `304442552123` | `eu-west-1` | `infra/config/dev.json`  | - |
+| `prod` | `304442552123` | `eu-west-1` | `infra/config/prod.json` | MFA required at sign-in; 90-day logs; PITR, deletion protection and `RETAIN` on the table and buckets; termination protection on every stack; tighter API throttle; `INFO` logs |
+
+Both stages live in the one AmaniLabs account, like Tender Tracker and the
+billing platform, and both configs are committed: an account id is an
+address, not a credential, and a config that cannot be read by CI cannot be
+synthesised by CI.
 
 ## 1. One-time bootstrap (a human, with admin credentials)
 
@@ -64,13 +69,11 @@ deploy credential cannot read a SACCO's data.
 
 ## 2. Configure the stage
 
-`infra/config/dev.json` is committed. `prod.json` is not:
-
-```bash
-cp infra/config/prod.json.example infra/config/prod.json
-```
-
-Every value is validated at synth, before any construct exists:
+`infra/config/<stage>.json` holds everything that differs between stages:
+region, account, alarm email, log retention, whether MFA is required, how
+long raw uploads are kept, and the per-tenant daily AI allowance
+(`aiDailyLimit`). Every value is validated at synth, before any construct
+exists:
 
 ```bash
 cd infra && npm ci && npm run typecheck && npm test && npm run synth
@@ -126,6 +129,50 @@ bundle.
 4. **Open the app** at the `AppUrl` output of the Web stack (the workflow
    summary prints it) and sign in.
 
+## 5. Production
+
+Production is the same five stacks from the same commit, deployed to the
+`prod` stage. It is not a copy of dev: the table and buckets are retained
+and deletion-protected, MFA is required, and the typed confirmation is the
+word `prod`. Before the first prod deploy, once:
+
+1. Create its deploy identity the same way as dev's, with the same admin
+   credentials, and run the `gh` commands it prints (they create the
+   `prod` and `admin-tasks-prod` GitHub environments):
+
+   ```bash
+   scripts/deploy-identity.sh prod hashimamani/amanilabs-audit-intelligence <admin-profile>
+   ```
+
+2. Dry-run, then deploy:
+
+   ```bash
+   gh workflow run deploy.yml -f stage=prod
+   gh workflow run deploy.yml -f stage=prod -f confirm=prod
+   ```
+
+3. Repeat section 4 for prod: confirm the alarm email, put the Anthropic
+   key into `audit-intelligence-prod-anthropic-api-key`, provision the
+   first real tenant with `-f stage=prod`.
+
+A SACCO's staff sign in with an authenticator app from their first login;
+tell them so before you send the invitation.
+
+## 6. Removing a tenant
+
+Off-boarding and the right to erasure are the same operation: the
+`delete tenant` workflow asks the deployed worker to remove the tenant's
+Cognito accounts, its uploaded CSVs and every record in its partition. The
+slug has to be typed twice.
+
+```bash
+gh workflow run delete-tenant.yml -f stage=prod -f slug=mwalimu-sacco -f confirm=mwalimu-sacco
+```
+
+There is no undo short of a point-in-time restore of the whole table
+(docs/RUNBOOK.md). The API itself cannot delete a user or a file: its role
+is not allowed to.
+
 ## Verifying
 
 - `aws dynamodb describe-table --table-name audit-intelligence-prod-main`
@@ -141,5 +188,8 @@ bundle.
 Production data resources are `RETAIN` with deletion protection, and prod
 stacks carry termination protection. `cdk destroy` will refuse, and if forced
 will leave the table and buckets behind. Removing a SACCO's audit records is
-a manual act taken on purpose, not a side effect of tearing down a stack.
-Dev can be destroyed and rebuilt freely.
+a manual act taken on purpose (section 6), not a side effect of tearing down
+a stack. Dev can be destroyed and rebuilt freely.
+
+The old EC2 pilot in us-east-1 is retired by hand, once prod is live and
+walked through: see `docs/DECOMMISSION_EC2.md`.
